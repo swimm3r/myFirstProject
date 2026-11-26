@@ -199,3 +199,22 @@ Current fix branch:
 - Validation still required: inspect final diff, run node --check on worker.js, and verify repository diff/PR. No Raspberry Pi/WebTorrent/Kodi runtime test has been performed for this fix.
 - Do not raise MAX_RAM_MB or claim playback fixed. User must deploy the merged main version to the Pi's rpi-server/downloader/worker.js path (or explain the copy/sync step) and retest with synchronized Kodi, gateway and worker logs.
 - User performs all merges; assistant must not merge.
+
+
+10. ROOT CAUSE FOUND: WEBTORRENT DEFAULT FULL-TORRENT SELECTION (2026-11-26)
+Verified against the deployed project dependency range (server/package.json: webtorrent ^1.9.7) and upstream WebTorrent v1.9.7 source:
+- In lib/torrent.js, metadata initialization (around lines 504-517) creates a default low-priority selection covering every piece: select(0, pieces.length - 1, false), unless BEP53 file selection is supplied.
+- The worker previously called torrent.files.forEach(file => file.deselect()). In WebTorrent v1.9.7, File.deselect() calls torrent.deselect(file._startPiece, file._endPiece, false), which only removes an exact file interval. It cannot remove the one full-torrent interval. Therefore the default full-torrent selection remained active.
+- WebTorrent's selection scheduler downloads pieces belonging to every active selection. The worker's priority-2 rolling window did not constrain or replace the still-active priority-0 full-torrent selection. The custom RingMemoryStore.put() retained every verified piece, so storeBytes grew with torrent-wide downloading (observed ~390-444 MB in ~10 seconds) despite a nominal 64 MiB window. This is the confirmed primary cause of the RAM growth.
+- Secondary avoidable overhead: WebTorrent wraps custom stores in CacheChunkStore by default with 20 cache slots unless storeCacheSlots is set to 0. RingMemoryStore is already RAM-backed but is not instanceof MemoryChunkStore, so the default wrapper can retain another 20 pieces in memory. This is bounded overhead, not the hundreds-of-MB root cause.
+
+Fix branch: fix/remove-webtorrent-default-full-selection
+- Created directly from latest main commit 75bf0c024bb96faac02865fac7be10bf0325eab1 (verified main and new branch identical before edits; main was 3 commits ahead of PR #6 base).
+- server/downloader/worker.js changes:
+  1) Explicitly deselect the exact global default interval (0..pieces.length-1, priority false) after torrent ready; do not rely on per-file deselect calls.
+  2) Log TORRENT_DEFAULT_SELECTION_REMOVED and expose current WebTorrent selection intervals/priorities in /status diagnostics, so runtime logs can prove only the stream and rolling-window selections remain.
+  3) Set storeCacheSlots: 0 to avoid the redundant CacheChunkStore layer on top of the custom RAM store.
+  4) Keep the current 64 MiB rolling window, 8 MiB rewind cushion, 8 MiB prebuffer, and 650 MB watchdog unchanged. No speculative buffer/limit tuning.
+- Upstream source reviewed: WebTorrent v1.9.7 lib/torrent.js (default selection, select/deselect exact-match behavior, CacheChunkStore wrapping) and lib/file.js (File.deselect interval), lib/file-stream.js (priority-1 stream selection).
+- Runtime validation on Raspberry Pi/Kodi is still required. Expected result: storeBytes should stay near the selected rolling window plus rewind/active stream/in-flight pieces, not grow by hundreds of MB. Check TORRENT_DEFAULT_SELECTION_REMOVED and torrentSelections in worker metrics.
+- No claim that playback is fixed until the user deploys and tests. User performs all merges; assistant must not merge.
