@@ -316,3 +316,82 @@ Validation / scope:
 
 Next:
 - Review the README/continuity diff, open a PR targeting main, and leave it unmerged for the user.
+
+
+14. SHARED TORRENTIOTV CLIENT: KODI + ENIGMA2 / VU+ SOLO2 (2026-11-26)
+
+User-confirmed product objective:
+- Deliver the same TorrentioTV experience on Kodi and on the VU+ Solo2.
+- Both clients must use the SAME streaming engine, SAME source discovery/providers, SAME torrent/file selection behavior and SAME RAM-buffering logic.
+- This is not a second independent streaming implementation and must not fork/tune the buffering algorithm separately for Enigma2.
+- Kodi remains supported; the Enigma2 client is an additional native frontend.
+
+Target hardware / image:
+- Receiver: VU+ Solo2 (user-confirmed exact model).
+- Image: BlackHole, described by user as the latest official version available.
+- Exact installed BlackHole version/build is NOT YET CONFIRMED. User will inspect the receiver later; do not block planning, but do not assume Python runtime, Enigma2 API, GStreamer capabilities or image build until verified.
+- Important distinction: BlackHole and OpenBH are separate image projects. Do not silently treat one as the other.
+- Hardware constraints matter: Solo2 is an older MIPS-based Enigma2 receiver with limited CPU/RAM compared with a Raspberry Pi/server. Keep torrent engine off the receiver unless later testing proves otherwise.
+
+Architecture decision:
+- Reuse the existing Node.js gateway and WebTorrent worker as the one shared streaming backend.
+- Backend remains responsible for Torrentio/source discovery, metadata, torrent selection, RAM-backed storage, prebuffering, rolling RAM window/eviction, HTTP byte-range delivery, subtitles, history and playback lifecycle/diagnostics to the extent already implemented.
+- Kodi addon remains one client/frontend and continues using the existing gateway APIs.
+- New Enigma2 plugin is a native Python frontend for Enigma2, using the receiver's remote-control navigation and native playback stack.
+- Intended flow:
+  VU+ Solo2 Enigma2 plugin -> existing Node.js gateway -> existing WebTorrent worker -> torrent peers.
+  Playback bytes return through the gateway's HTTP video endpoint to the Enigma2 playback component.
+- Do not add WebTorrent or duplicate torrent downloading to the Solo2. Do not implement a second RAM buffer on the receiver. Receiver-side buffering is limited to what its native player/network stack requires; the project's authoritative torrent cache/window remains in the shared worker.
+- Gateway/worker remain on the existing server/Raspberry Pi host (subject to deployment topology confirmation). The Solo2 must only need LAN access to the gateway.
+
+Enigma2 plugin scope (initial target):
+- Native Enigma2 screens for catalog browsing, movie/series navigation, search, details/source list, selected stream preparation, playback and diagnostics.
+- Use the same catalog, metadata, stream and subtitle endpoints and same source ordering/selection semantics as Kodi wherever possible.
+- Start playback from the gateway-provided HTTP stream URL; support HTTP Range requests through the native player path if the Enigma2 player stack supports them.
+- Integrate native playback callbacks for start, pause, resume, stop, end and error; forward pause/resume/cancel/stop to the same gateway lifecycle endpoints as Kodi.
+- Preserve Continue Watching/history behavior using the shared gateway history API.
+- Provide remote-control-friendly navigation and clear network/backend error handling.
+- Add lightweight diagnostics appropriate to a TV UI (backend reachability, selected source/file, preparation state, playback state, and relevant worker status fields). Do not poll aggressively or overload the receiver/backend.
+- Subtitles: reuse the existing subtitle discovery/download path; verify how the Enigma2 player accepts external subtitle files and what temporary filesystem location is safe on this image.
+
+Compatibility and implementation constraints:
+- First inspect the exact BlackHole version/build and the Python interpreter/runtime available on the Solo2. Do not assume Python 2 or Python 3 from the image family name alone.
+- Inspect installed Enigma2 APIs and native player capabilities on the actual image: e.g. available service/player interfaces, HTTP streaming and byte-range behavior, subtitle integration, and callback/lifecycle semantics.
+- Choose the plugin packaging/layout and Python syntax to match the verified image. Keep dependencies minimal; avoid large pip installs or compiled dependencies on the receiver.
+- Do not import Kodi modules (xbmc, xbmcgui, xbmcplugin, xbmcaddon) into the Enigma2 plugin. Share backend protocol/behavior, not Kodi UI code.
+- Keep UI and receiver-specific playback integration isolated from gateway/worker code. Prefer a small API client layer and explicit Enigma2 screen/player modules.
+- Validate receiver RAM/CPU/network constraints and ensure the plugin does not buffer entire media files locally.
+- Gateway currently binds to the LAN interface and has no authentication (see README security note). Keep it on a trusted LAN; do not expose it directly to the public internet. Any later authentication/network hardening should preserve compatibility for both clients.
+
+Proposed repository layout (to confirm during implementation):
+- enigma2-plugin/plugin.extensions.torrentiotv/ (or the package naming convention required by BlackHole/Enigma2)
+- plugin.py / plugin descriptor and setup metadata
+- resources/ for screen skin/assets/settings as needed
+- src/ or lib/ for gateway API client, catalog models and playback integration
+- Keep kodi-addon/ unchanged except for deliberate shared-backend API compatibility changes.
+- Do not create this layout until the exact packaging conventions and Python runtime are checked against the target image.
+
+Implementation sequence:
+1) When the user is ready, obtain exact BlackHole version/build from Menu -> Information -> About (or the corresponding About screen), plus Python version if accessible. Also record Enigma2 version and relevant player/GStreamer details where available.
+2) Inspect the current latest main (not an old branch) and re-read gateway routes, response shapes, stream URL behavior, subtitles/history/lifecycle endpoints and current README. Confirm the server host/IP and how the gateway is deployed/reached from the receiver.
+3) Inspect Solo2/BlackHole Enigma2 APIs and package conventions; establish whether native playback supports the gateway HTTP byte-range stream reliably. Verify URL authentication/network constraints if any.
+4) Write a small compatibility/prototype test for gateway reachability, HTTP headers/Range requests, native playback and playback callbacks before implementing the full UI.
+5) Implement the Enigma2 plugin as a separate frontend. Reuse existing APIs and behavior; avoid changes to the shared engine unless a real protocol gap is found.
+6) Test on actual Solo2: browsing, source selection, preparation/cancel, playback beyond the previous failure points, seek/Range behavior, pause/resume/stop, subtitles, history, and repeated playback. Monitor gateway/worker metrics to confirm the SAME worker RAM window and selection logic is used.
+7) Regression-test Kodi against the same backend to ensure no regression. Document any backend API change for both clients.
+8) Update README and this continuity file in the same PR with verified installation, configuration, compatibility and test results.
+
+Acceptance criteria:
+- Both Kodi and Enigma2 select from the same Torrentio/source results and call the same backend.
+- Only one WebTorrent worker/torrent session and one authoritative RAM-buffering/rolling-window implementation are used for playback.
+- Enigma2 playback uses the gateway's HTTP stream and does not write torrent payload to receiver storage or create a second full-file cache.
+- Pause/resume/cancel/stop and history are consistent with the shared backend semantics.
+- Kodi continues to work unchanged (or any intentional API change is regression-tested on Kodi).
+- Actual Solo2/BlackHole playback and byte-range/seek behavior are demonstrated; syntax checks or desktop mocks alone are not enough to declare the port complete.
+
+Current status:
+- Planning decision only. No Enigma2 plugin code has been created yet.
+- No changes to gateway, worker or Kodi client were made for this feature.
+- No Solo2 device test has been performed; exact BlackHole build/Python/Enigma2 runtime and player capabilities remain unknown pending the user's inspection.
+- The user is not available to inspect the receiver immediately. Continue with repository/backend design and compatibility research without requiring immediate device access; defer image-specific assumptions and final playback integration until the exact build is confirmed.
+- This documentation update is being prepared on branch docs/vu-solo2-enigma2-roadmap, created from latest main commit aaeb6c93010125591c8b246ebcab9e296ea752d1. Target main; user performs all merges.
