@@ -57,6 +57,8 @@ const WINDOW_BYTES = 64 * 1024 * 1024;
 const PREBUFFER_BYTES = 8 * 1024 * 1024;
 const PREBUFFER_TIMEOUT_MS = 30000;
 const WINDOW_UPDATE_BYTES = 1 * 1024 * 1024;
+// Keep each WebTorrent FileStream selection bounded; the HTTP response remains continuous.
+const STREAM_SEGMENT_BYTES = 4 * 1024 * 1024;
 // Keep this priority distinct from FileStream's priority=1 selections.
 const RAM_WINDOW_PRIORITY = 2;
 
@@ -429,7 +431,7 @@ function parseByteRange(header, fileSize) {
     end = fileSize - 1;
   } else {
     start = Number(left);
-    end = right === '' ? Math.min(start + 16 * 1024 * 1024 - 1, fileSize - 1) : Number(right);
+    end = right === '' ? fileSize - 1 : Number(right);
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= fileSize || start > end) return null;
     end = Math.min(end, fileSize - 1);
   }
@@ -467,48 +469,139 @@ app.get('/raw-stream', (req, res) => {
   const range = sendStreamHeaders(req, res);
   if (!range) return;
   const { start, end } = range;
+  const file = activeFile;
 
   streamRequestCount++;
   lastStreamEventAt = Date.now();
   lastPlaybackOffset = start;
-  diag('STREAM_REQUEST', { request: streamRequestCount, method: req.method, range: req.headers.range || null, start, end, requestedBytes: end - start + 1 });
-  const stream = activeFile.createReadStream({ start, end });
-  activeStreams.add(stream);
+  diag('STREAM_REQUEST', {
+    request: streamRequestCount,
+    method: req.method,
+    range: req.headers.range || null,
+    start,
+    end,
+    requestedBytes: end - start + 1,
+    segmented: true,
+    segmentBytes: STREAM_SEGMENT_BYTES
+  });
+
+  // File.createReadStream() registers a WebTorrent selection for its complete
+  // requested interval. Never create one stream for a multi-GB HTTP range:
+  // that would defeat the rolling RAM window. Read bounded segments instead.
+  const streamStartedAt = Date.now();
+  let cursor = start;
   let streamedBytes = 0;
   let nextWindowUpdate = WINDOW_UPDATE_BYTES;
-  stream.on('data', (chunk) => {
-    streamedBytes += chunk.length;
-    lastPlaybackOffset = start + streamedBytes;
-    lastStreamEventAt = Date.now();
-    lastActivity = Date.now();
-    if (streamedBytes >= nextWindowUpdate) {
-      updateRamWindow(Math.min(start + streamedBytes, activeFile.length - 1));
-      nextWindowUpdate = streamedBytes + WINDOW_UPDATE_BYTES;
-    }
-  });
+  let currentStream = null;
+  let requestClosed = false;
+  let cleanupLogged = false;
 
-  const streamStartedAt = Date.now();
-  const cleanupStream = () => {
-    activeStreams.delete(stream);
-    diag('STREAM_CLEANUP', { request: streamRequestCount, streamedBytes, durationMs: Date.now() - streamStartedAt, activeStreams: activeStreams.size });
-    try { stream.destroy(); } catch (e) {}
+  const logCleanup = (reason) => {
+    if (cleanupLogged) return;
+    cleanupLogged = true;
+    diag('STREAM_CLEANUP', {
+      request: streamRequestCount,
+      streamedBytes,
+      durationMs: Date.now() - streamStartedAt,
+      activeStreams: activeStreams.size,
+      reason
+    });
   };
 
-  stream.on('error', () => {
-    cleanupStream();
-    if (!res.headersSent) res.status(500).end();
-    else res.end();
-  });
+  const abortCurrentStream = () => {
+    requestClosed = true;
+    if (currentStream) {
+      const stream = currentStream;
+      currentStream = null;
+      activeStreams.delete(stream);
+      try { stream.destroy(); } catch (e) {}
+    }
+    logCleanup('client disconnected or response closed');
+  };
 
   res.on('close', () => {
-    if (!res.writableEnded) {
-      cleanupStream();
-    } else {
-      activeStreams.delete(stream);
+    if (!res.writableEnded) abortCurrentStream();
+    else {
+      if (currentStream) activeStreams.delete(currentStream);
+      currentStream = null;
+      logCleanup('response finished');
     }
   });
 
-  stream.pipe(res);
+  const pumpNextSegment = () => {
+    if (requestClosed || res.destroyed || res.writableEnded) return;
+    if (cursor > end) {
+      res.end();
+      logCleanup('range completed');
+      return;
+    }
+    if (activeTorrent === null || activeFile !== file) {
+      logCleanup('torrent replaced while streaming');
+      res.destroy();
+      return;
+    }
+
+    const segmentStart = cursor;
+    const segmentEnd = Math.min(end, segmentStart + STREAM_SEGMENT_BYTES - 1);
+    updateRamWindow(segmentStart);
+
+    const stream = file.createReadStream({ start: segmentStart, end: segmentEnd });
+    currentStream = stream;
+    activeStreams.add(stream);
+    let segmentEnded = false;
+
+    stream.on('data', (chunk) => {
+      streamedBytes += chunk.length;
+      lastPlaybackOffset = start + streamedBytes;
+      lastStreamEventAt = Date.now();
+      lastActivity = Date.now();
+
+      while (streamedBytes >= nextWindowUpdate) {
+        updateRamWindow(Math.min(start + streamedBytes, file.length - 1));
+        nextWindowUpdate += WINDOW_UPDATE_BYTES;
+      }
+    });
+
+    stream.on('end', () => {
+      segmentEnded = true;
+      activeStreams.delete(stream);
+      if (currentStream === stream) currentStream = null;
+      cursor = segmentEnd + 1;
+      pumpNextSegment();
+    });
+
+    stream.on('close', () => {
+      if (!segmentEnded && !requestClosed && !res.destroyed) {
+        activeStreams.delete(stream);
+        if (currentStream === stream) currentStream = null;
+        diag('STREAM_SEGMENT_CLOSED_EARLY', {
+          request: streamRequestCount,
+          segmentStart,
+          segmentEnd,
+          streamedBytes
+        });
+        res.destroy();
+      }
+    });
+
+    stream.on('error', (err) => {
+      activeStreams.delete(stream);
+      if (currentStream === stream) currentStream = null;
+      diag('STREAM_SEGMENT_ERROR', {
+        request: streamRequestCount,
+        segmentStart,
+        segmentEnd,
+        message: err.message,
+        streamedBytes
+      });
+      if (!res.headersSent) res.status(500).end();
+      else res.destroy(err);
+    });
+
+    stream.pipe(res, { end: false });
+  };
+
+  pumpNextSegment();
 });
 
 app.post('/pause', (req, res) => {
