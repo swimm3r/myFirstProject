@@ -87,6 +87,18 @@ function diag(event, details = {}) {
 function getDiagnostics() {
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
   const storeBytes = activeStore ? activeStore.bytes : 0;
+  let bufferAheadBytes = 0;
+  if (activeTorrent && activeFile && activeStore && activeStore.chunks && activeTorrent.pieceLength) {
+    const pieceLength = activeTorrent.pieceLength;
+    const currentPiece = Math.floor((activeFile.offset + lastPlaybackOffset) / pieceLength);
+    const fileEndPiece = Math.floor((activeFile.offset + activeFile.length - 1) / pieceLength);
+    const maxPieces = Math.ceil(WINDOW_BYTES / pieceLength);
+    for (let i = currentPiece; i <= Math.min(fileEndPiece, currentPiece + maxPieces); i++) {
+      const chunk = activeStore.chunks.get(i);
+      if (!chunk) break;
+      bufferAheadBytes += chunk.length;
+    }
+  }
   return {
     timestamp: Date.now(),
     sessionId: diagnosticSessionId,
@@ -105,6 +117,7 @@ function getDiagnostics() {
     uploadedBytes: activeTorrent ? activeTorrent.uploaded : 0,
     pieceLength: activeTorrent ? activeTorrent.pieceLength : 0,
     storeBytes,
+    bufferAheadBytes,
     storePieces: activeStore && activeStore.chunks ? activeStore.chunks.size : 0,
     activeStreams: activeStreams.size,
     streamRequestCount,
