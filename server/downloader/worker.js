@@ -1,6 +1,5 @@
 const express = require('express');
 const WebTorrent = require('webtorrent');
-const MemoryChunkStore = require('memory-chunk-store');
 
 const app = express();
 app.use(express.json());
@@ -12,8 +11,37 @@ process.on('unhandledRejection', (err) => {
   console.error('[WORKER] Unhandled Rejection:', err);
 });
 
-const MAX_RAM_MB = 350;
-const IDLE_TIMEOUT_MS = 15000;
+class RingMemoryStore {
+  constructor(chunkLength, opts = {}) {
+    this.chunkLength = chunkLength;
+    this.chunks = new Map();
+    this.closed = false;
+  }
+  put(index, buf, cb = () => {}) {
+    if (this.closed) return cb(new Error('Store closed'));
+    this.chunks.set(index, Buffer.from(buf));
+    cb(null);
+  }
+  get(index, opts, cb) {
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    if (this.closed) return cb(new Error('Store closed'));
+    const buf = this.chunks.get(index);
+    if (!buf) return cb(new Error(`Chunk ${index} missing`));
+    const offset = (opts && opts.offset) || 0;
+    const len = (opts && opts.length) || (buf.length - offset);
+    cb(null, buf.subarray(offset, offset + len));
+  }
+  evictBefore(minIndex) {
+    for (const key of this.chunks.keys()) {
+      if (key < minIndex) this.chunks.delete(key);
+    }
+  }
+  close(cb = () => {}) { this.chunks.clear(); this.closed = true; cb(null); }
+  destroy(cb = () => {}) { this.close(cb); }
+}
+
+const MAX_RAM_MB = 650;
+const IDLE_TIMEOUT_MS = 45000;
 const PAUSE_TIMEOUT_MS = 600000;
 const WINDOW_BYTES = 48 * 1024 * 1024;
 
@@ -60,17 +88,23 @@ function stopAndClean(reason) {
 }
 
 setInterval(() => {
+  if (!activeTorrent) return;
+
+  if (global.gc) {
+    try { global.gc(); } catch (e) {}
+  }
+
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
   if (rssMB > MAX_RAM_MB) {
     stopAndClean(`Limita de RAM depasita (${rssMB} MB > ${MAX_RAM_MB} MB)`);
     return;
   }
 
-  if (!activeTorrent || lastActivity === 0) return;
+  if (lastActivity === 0) return;
 
   const idleFor = Date.now() - lastActivity;
   if (!isPaused && idleFor > IDLE_TIMEOUT_MS) {
-    stopAndClean('Inactivitate Kodi > 15 secunde (Dead-man switch)');
+    stopAndClean('Inactivitate Kodi > 45 secunde (Dead-man switch)');
   } else if (isPaused && idleFor > PAUSE_TIMEOUT_MS) {
     stopAndClean('Pauza prelungita > 10 minute');
   }
@@ -90,6 +124,9 @@ function updateRamWindow(byteOffset) {
     const dropUntil = currentPiece - keepBehindPieces;
     if (dropUntil > fileStartPiece) {
       activeTorrent.deselect(fileStartPiece, dropUntil, false);
+      if (activeTorrent.store && typeof activeTorrent.store.evictBefore === 'function') {
+        activeTorrent.store.evictBefore(dropUntil);
+      }
     }
 
     const endPriority = Math.min(fileEndPiece, currentPiece + windowPieces);
@@ -116,7 +153,7 @@ app.post('/load', (req, res) => {
 
   console.log('[WORKER] Conectare la peers in RAM...');
   const torrent = client.add(magnet, {
-    store: MemoryChunkStore,
+    store: RingMemoryStore,
     sequential: true
   });
 
