@@ -253,6 +253,22 @@ def show_streams(media_type, stream_id, name, poster, season=0, episode=0, base_
     xbmcplugin.endOfDirectory(HANDLE)
 
 
+def format_rate(value):
+    value = float(value or 0)
+    if value >= 1024 * 1024:
+        return f"{value / 1024 / 1024:.2f} MB/s"
+    return f"{value / 1024:.0f} KB/s"
+
+
+def sparkline(values, width=24):
+    if not values:
+        return '-' * width
+    values = values[-width:]
+    peak = max(max(values), 1)
+    chars = '._-:=+*#'
+    return ''.join(chars[min(len(chars) - 1, int((v / peak) * (len(chars) - 1)))] for v in values)
+
+
 class TorrentioPlayer(xbmc.Player):
     def __init__(self, server_url, history_payload):
         super().__init__()
@@ -260,27 +276,40 @@ class TorrentioPlayer(xbmc.Player):
         self.history_payload = history_payload
         self.stopped = False
         self.last_pos = 0
+        self.stop_reason = 'unknown'
+
+    def onPlayBackStarted(self):
+        xbmc.log('[TorrentioTV][PLAYER] onPlayBackStarted', xbmc.LOGINFO)
 
     def onPlayBackPaused(self):
+        xbmc.log('[TorrentioTV][PLAYER] onPlayBackPaused', xbmc.LOGWARNING)
         http_post_json(f'{self.server_url}/api/pause', timeout=2)
 
     def onPlayBackResumed(self):
+        xbmc.log('[TorrentioTV][PLAYER] onPlayBackResumed', xbmc.LOGINFO)
         http_post_json(f'{self.server_url}/api/resume', timeout=2)
 
     def onPlayBackStopped(self):
+        self.stop_reason = 'Kodi callback: stopped'
+        xbmc.log('[TorrentioTV][PLAYER] onPlayBackStopped', xbmc.LOGWARNING)
         self._notify_stop()
 
     def onPlayBackEnded(self):
+        self.stop_reason = 'Kodi callback: ended'
+        xbmc.log('[TorrentioTV][PLAYER] onPlayBackEnded', xbmc.LOGINFO)
         self._notify_stop()
 
     def onPlayBackError(self):
+        self.stop_reason = 'Kodi callback: error'
+        xbmc.log('[TorrentioTV][PLAYER] onPlayBackError', xbmc.LOGERROR)
         self._notify_stop()
 
     def _notify_stop(self):
         if self.stopped:
             return
         self.stopped = True
-        http_post_json(f'{self.server_url}/api/stop', timeout=2)
+        xbmc.log(f'[TorrentioTV][PLAYER] Sending STOP reason={self.stop_reason}, position={self.last_pos:.1f}s', xbmc.LOGWARNING)
+        http_post_json(f'{self.server_url}/api/stop', {'reason': self.stop_reason, 'position': self.last_pos}, timeout=2)
         self.history_payload['position'] = int(self.last_pos)
         http_post_json(f'{self.server_url}/api/history', self.history_payload, timeout=2)
 
@@ -336,6 +365,11 @@ def play_stream(params):
     player = TorrentioPlayer(server, history_payload)
     monitor = xbmc.Monitor()
 
+    diag = xbmcgui.DialogProgressBG()
+    diag.create('TorrentioTV diagnostics', 'Waiting for playback...')
+    speed_samples = []
+    buffer_samples = []
+    last_status_log = 0
     wait_start = time.time()
     while not player.isPlaying() and (time.time() - wait_start) < 15:
         if monitor.waitForAbort(0.5):
@@ -344,11 +378,43 @@ def play_stream(params):
     while player.isPlaying() and not monitor.abortRequested():
         try:
             player.last_pos = player.getTime()
-        except Exception:
-            pass
+        except Exception as e:
+            xbmc.log(f'[TorrentioTV][PLAYER] getTime failed: {e}', xbmc.LOGDEBUG)
+
+        status = http_get_json(f'{server}/api/status', timeout=2) or {}
+        worker = status.get('worker') or {}
+        speed = float(worker.get('downloadBytesPerSecond') or 0)
+        store_mb = float(worker.get('storeBytes') or 0) / 1024 / 1024
+        peers = worker.get('peers', 0)
+        speed_samples.append(speed)
+        buffer_samples.append(store_mb)
+        speed_samples = speed_samples[-24:]
+        buffer_samples = buffer_samples[-24:]
+
+        msg = (
+            f"Pos: {player.last_pos:.0f}s | DL: {format_rate(speed)} | "
+            f"UL: {format_rate(worker.get('uploadBytesPerSecond', 0))} | Peers: {peers}\n"
+            f"RAM: {worker.get('ramMB', '?')} MB | Store: {store_mb:.1f} MB | "
+            f"Streams: {worker.get('activeStreams', 0)} | Conexiuni: {worker.get('connections', 0)}\n"
+            f"DL grafic: {sparkline(speed_samples)}\n"
+            f"RAM buffer: {sparkline(buffer_samples)}\n"
+            f"Offset: {int(worker.get('playbackOffset', 0)) / 1024 / 1024:.1f} MB | "
+            f"Idle: {worker.get('idleForMs', '?')} ms"
+        )
+        diag.update(0, 'TorrentioTV LIVE', msg)
+        if time.time() - last_status_log >= 5:
+            xbmc.log('[TorrentioTV][METRICS] ' + json.dumps({
+                'position': player.last_pos, 'downloadBps': speed,
+                'uploadBps': worker.get('uploadBytesPerSecond'), 'peers': peers,
+                'storeBytes': worker.get('storeBytes'), 'ramMB': worker.get('ramMB'),
+                'activeStreams': worker.get('activeStreams'), 'offset': worker.get('playbackOffset')
+            }, sort_keys=True), xbmc.LOGINFO)
+            last_status_log = time.time()
         if monitor.waitForAbort(1.0):
             break
 
+    diag.close()
+    xbmc.log(f'[TorrentioTV][PLAYER] Playback loop ended; isPlaying={player.isPlaying()}, position={player.last_pos:.1f}s', xbmc.LOGWARNING)
     player._notify_stop()
 
 
