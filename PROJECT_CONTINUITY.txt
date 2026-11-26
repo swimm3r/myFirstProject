@@ -287,3 +287,35 @@ Commits on branch:
 Next:
 - Open PR against main and leave it unmerged for the user.
 - After the user merges and installs the updated Kodi add-on, verify settings visibility, per-field selection, one-line rendering and normal playback.
+
+13. PERSISTENT KODI VIDEO DEBUG OVERLAY (2026-11-26)
+Branch:
+- fix/kodi-persistent-debug-overlay
+- Created from the latest main ref.
+- PR target: main. User performs all merges; do not merge.
+
+User diagnosis / requirement:
+- The configurable diagnostics appeared briefly during movie loading and then disappeared.
+- User clarified the issue is the display layer/overlay: diagnostics must remain visible throughout playback, not only during loading.
+- Preserve all existing debug settings and selected metrics.
+
+Implementation:
+- Replaced xbmcgui.DialogProgressBG with xbmcgui.WindowDialog plus xbmcgui.ControlLabel.
+- New TorrentioDebugOverlay creates a Kodi dialog window, positions a text label near the top-left using the current screen width, and updates that label once per playback-loop iteration.
+- Overlay is created only after player.isPlaying() becomes true and is closed when the playback loop ends.
+- All 12 existing debug field toggles and the existing one-line diagnostic text are preserved.
+- Periodic METRICS logging and status polling are unchanged.
+- Overlay creation failure is logged; no fallback to DialogProgressBG is used.
+
+Validation:
+- Source transformation confirmed all DialogProgressBG/diag.update references were removed and the new overlay class is called from the active playback loop.
+- Kodi Python API docs confirm Window.show(), Window.close(), Window.addControl(), WindowDialog and ControlLabel are supported; getScreenWidth() is available in Kodi's Python GUI API.
+- Python AST/syntax check and actual Kodi 21 runtime test on Raspberry Pi remain outstanding.
+- In particular, confirm the WindowDialog remains composited above fullscreen video with the user's Kodi 21 skin, and that the label position/length are suitable. Do not claim the overlay fix is runtime-proven until tested on the Pi.
+
+Commit:
+- default.py: 876ddb87f409a32a0c8228ac613a854d30d9eb71
+
+Next:
+- Finish continuity update, inspect final diff, run any available static validation, and open PR to main.
+- User installs/tests the PR on Raspberry Pi with Kodi 21. Verify overlay stays visible for the full movie and closes at playback end.
