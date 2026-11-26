@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<defs>
+ <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#071629"/><stop offset=".55" stop-color="#06101f"/><stop offset="1" stop-color="#02060d"/></linearGradient>
+ <linearGradient id="blue" x2="1" y2="1"><stop stop-color="#65eaff"/><stop offset=".5" stop-color="#08a9f5"/><stop offset="1" stop-color="#0755bd"/></linearGradient>
+ <linearGradient id="metal" x2="0" y2="1"><stop stop-color="#fff"/><stop offset=".45" stop-color="#8e9aa8"/><stop offset="1" stop-color="#303b49"/></linearGradient>
+ <filter id="glow"><feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <clipPath id="clip"><rect x="12" y="12" width="488" height="488" rx="92"/></clipPath>
+</defs>
+<g clip-path="url(#clip)">
+ <rect width="512" height="512" fill="url(#bg)"/>
+ <path d="M-25 170 Q120 -30 300 15 T550 120" fill="none" stroke="#0aaeff" stroke-width="26" opacity=".22"/>
+ <path d="M-20 183 Q120 -18 302 27 T550 132" fill="none" stroke="#45d8ff" stroke-width="5" opacity=".9"/>
+ <g opacity=".85" fill="#bcefff"><rect x="35" y="73" width="24" height="12" rx="3" transform="rotate(-25 35 73)"/><rect x="82" y="48" width="24" height="12" rx="3" transform="rotate(-18 82 48)"/><rect x="132" y="32" width="24" height="12" rx="3" transform="rotate(-8 132 32)"/><rect x="185" y="28" width="24" height="12" rx="3"/><rect x="238" y="31" width="24" height="12" rx="3" transform="rotate(8 238 31)"/></g>
+ <g transform="translate(66 118) rotate(-8 190 100)">
+  <path d="M12 46 L356 10 Q374 8 379 27 L388 70 L24 107 Q8 108 5 90Z" fill="#111923" stroke="url(#metal)" stroke-width="8"/>
+  <path d="M18 39 L75 33 L87 89 L30 95Z M125 27 L183 21 L195 77 L137 83Z M232 16 L290 10 L302 66 L244 72Z" fill="#dce7f2"/>
+  <rect x="10" y="91" width="390" height="22" rx="8" fill="#111923" stroke="#8493a5" stroke-width="5"/>
+ </g>
+ <g transform="translate(63 168)">
+  <rect x="0" y="0" width="385" height="225" rx="26" fill="#080e18" stroke="#8295aa" stroke-width="8"/>
+  <path d="M190 49 L278 105 L190 161Z" fill="url(#blue)" stroke="#9df2ff" stroke-width="6" filter="url(#glow)"/>
+  <path d="M50 0 L88 0 L28 225 L0 225Z" fill="#fff" opacity=".04"/>
+ </g>
+ <g transform="translate(18 235)" fill="none" stroke="url(#metal)" stroke-width="17">
+  <circle cx="67" cy="67" r="57"/><circle cx="67" cy="67" r="33"/><circle cx="67" cy="67" r="10"/>
+ </g>
+ <g transform="translate(376 175)">
+  <path d="M5 38 Q52 -5 100 38 L100 174 Q53 210 5 174Z" fill="#a91c25" stroke="#f4d9ce" stroke-width="7"/>
+  <path d="M5 55 L100 55 M28 57 L28 187 M75 57 L75 187" stroke="#f8e8df" stroke-width="13" opacity=".9"/>
+  <g fill="#ffe6a3" stroke="#fff5d9" stroke-width="3"><circle cx="18" cy="18" r="14"/><circle cx="46" cy="5" r="15"/><circle cx="73" cy="19" r="14"/><circle cx="94" cy="5" r="12"/><circle cx="42" cy="35" r="13"/></g>
+ </g>
+ <path d="M383 323 C330 276 365 230 408 253 C449 274 418 310 389 300" fill="none" stroke="#ed263c" stroke-width="31" stroke-linecap="round"/>
+ <path d="M416 240 Q451 211 474 241 M423 262 Q449 242 466 261" fill="none" stroke="#3bdcff" stroke-width="8" stroke-linecap="round" filter="url(#glow)"/>
+ <path d="M0 414 Q256 376 512 414 V512 H0Z" fill="#030812" opacity=".95"/>
+ <text x="256" y="432" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="51" font-weight="800" fill="#fff" letter-spacing="-2">Torrentio<tspan fill="#13bfff">TV</tspan></text>
+ <path d="M72 449 Q256 421 440 449" fill="none" stroke="#12bfff" stroke-width="5"/>
+ <text x="256" y="478" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="700" fill="#c8d8e8" letter-spacing="7">KODI ADD-ON</text>
+</g>
+<rect x="12" y="12" width="488" height="488" rx="92" fill="none" stroke="#8fdfff" stroke-opacity=".55" stroke-width="5"/>
+</svg>
