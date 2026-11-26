@@ -88,6 +88,16 @@ function diag(event, details = {}) {
   console.log(`[WORKER][${stamp}][${diagnosticSessionId || 'no-session'}] ${event} ${JSON.stringify(details)}`);
 }
 
+function getTorrentSelections(torrent = activeTorrent) {
+  if (!torrent || !Array.isArray(torrent._selections)) return [];
+  return torrent._selections.map(selection => ({
+    start: selection.from,
+    end: selection.to,
+    offset: selection.offset,
+    priority: selection.priority
+  }));
+}
+
 function getDiagnostics() {
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
   const storeBytes = activeStore ? activeStore.bytes : 0;
@@ -124,6 +134,7 @@ function getDiagnostics() {
     bufferAheadBytes,
     storePieces: activeStore && activeStore.chunks ? activeStore.chunks.size : 0,
     ramWindowSelection: ramWindowSelection ? { ...ramWindowSelection } : null,
+    torrentSelections: getTorrentSelections(),
     activeStreams: activeStreams.size,
     streamRequestCount,
     lastStreamEventAt,
@@ -327,6 +338,8 @@ app.post('/load', (req, res) => {
   console.log('[WORKER] Conectare la peers in RAM...');
   const torrent = client.add(magnet, {
     store: RingMemoryStore,
+    // RingMemoryStore is already RAM-backed; avoid WebTorrent's extra 20-piece cache.
+    storeCacheSlots: 0,
     sequential: true
   });
 
@@ -347,7 +360,18 @@ app.post('/load', (req, res) => {
     if (!isCurrentLoad() || responded) return;
     clearLoadTimer();
 
-    torrent.files.forEach((f) => f.deselect());
+    // WebTorrent 1.9.7 creates one low-priority selection for the entire torrent.
+    // File.deselect() only removes a file-sized interval, so it cannot remove this
+    // full-torrent selection. Remove the exact global interval before selecting RAM.
+    const torrentEndPiece = torrent.pieces.length - 1;
+    if (torrentEndPiece >= 0) {
+      torrent.deselect(0, torrentEndPiece, false);
+    }
+    const remainingSelections = getTorrentSelections(torrent);
+    diag('TORRENT_DEFAULT_SELECTION_REMOVED', {
+      totalPieces: torrent.pieces.length,
+      remainingSelections
+    });
 
     let target = (typeof fileIdx === 'number' && torrent.files[fileIdx])
       ? torrent.files[fileIdx]
