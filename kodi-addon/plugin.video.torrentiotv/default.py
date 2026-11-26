@@ -106,10 +106,15 @@ def main_menu():
         ('Popular Movies', {'action': 'catalog', 'cat': 'movie'}),
         ('Popular Series', {'action': 'catalog', 'cat': 'series'}),
         ('Netflix (Action)', {'action': 'catalog', 'cat': 'netflix'}),
+        ('Netflix Series', {'action': 'catalog', 'cat': 'netflix_series'}),
         ('HBO / Max (Drama)', {'action': 'catalog', 'cat': 'hbo'}),
+        ('HBO / Max Series', {'action': 'catalog', 'cat': 'hbo_series'}),
         ('Disney+ (Animation)', {'action': 'catalog', 'cat': 'disney'}),
+        ('Disney+ Series', {'action': 'catalog', 'cat': 'disney_series'}),
         ('Prime Video (Sci-Fi)', {'action': 'catalog', 'cat': 'prime'}),
+        ('Prime Video Series', {'action': 'catalog', 'cat': 'prime_series'}),
         ('Apple TV+ (Thriller)', {'action': 'catalog', 'cat': 'apple'}),
+        ('Apple TV+ Series', {'action': 'catalog', 'cat': 'apple_series'}),
         ('Search (Name or IMDb ID)', {'action': 'search'}),
         ('Settings (Set Server IP)', {'action': 'settings'})
     ]

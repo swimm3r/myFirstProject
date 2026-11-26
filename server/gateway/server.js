@@ -130,23 +130,30 @@ app.get('/api/catalog', async (req, res) => {
     let url = `${CINEMETA_URL}/catalog/movie/top.json`;
     let mediaType = 'movie';
 
+    const themedCategories = {
+      netflix: { type: 'movie', genre: 'Action' },
+      hbo: { type: 'movie', genre: 'Drama' },
+      disney: { type: 'movie', genre: 'Animation' },
+      prime: { type: 'movie', genre: 'Sci-Fi' },
+      apple: { type: 'movie', genre: 'Thriller' },
+      netflix_series: { type: 'series', genre: 'Action' },
+      hbo_series: { type: 'series', genre: 'Drama' },
+      disney_series: { type: 'series', genre: 'Animation' },
+      prime_series: { type: 'series', genre: 'Sci-Fi' },
+      apple_series: { type: 'series', genre: 'Thriller' }
+    };
+
     if (q) {
-      const searchType = (category === 'series') ? 'series' : 'movie';
+      const searchType = (category === 'series' || category.endsWith('_series')) ? 'series' : 'movie';
       mediaType = searchType;
       url = `${CINEMETA_URL}/catalog/${searchType}/top/search=${encodeURIComponent(q)}.json`;
     } else if (category === 'series') {
       mediaType = 'series';
       url = `${CINEMETA_URL}/catalog/series/top.json`;
-    } else if (category === 'netflix') {
-      url = `${CINEMETA_URL}/catalog/movie/top/genre=Action.json`;
-    } else if (category === 'hbo') {
-      url = `${CINEMETA_URL}/catalog/movie/top/genre=Drama.json`;
-    } else if (category === 'disney') {
-      url = `${CINEMETA_URL}/catalog/movie/top/genre=Animation.json`;
-    } else if (category === 'prime') {
-      url = `${CINEMETA_URL}/catalog/movie/top/genre=Sci-Fi.json`;
-    } else if (category === 'apple') {
-      url = `${CINEMETA_URL}/catalog/movie/top/genre=Thriller.json`;
+    } else if (themedCategories[category]) {
+      const config = themedCategories[category];
+      mediaType = config.type;
+      url = `${CINEMETA_URL}/catalog/${config.type}/top/genre=${encodeURIComponent(config.genre)}.json`;
     }
 
     const r = await fetchWithTimeout(url, {}, 8000);
