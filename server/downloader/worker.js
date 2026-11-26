@@ -496,7 +496,7 @@ app.post('/cancel', (req, res) => {
 });
 
 app.post('/stop', (req, res) => {
-  diag('KODI_STOP', getDiagnostics());
+  diag('KODI_STOP', { reason: req.body && req.body.reason, position: req.body && req.body.position, state: getDiagnostics() });
   activeLoadId++;
   if (pendingLoadTimer) {
     clearTimeout(pendingLoadTimer);
