@@ -316,3 +316,19 @@ Validation / scope:
 
 Next:
 - Review the README/continuity diff, open a PR targeting main, and leave it unmerged for the user.
+
+
+14. KODI ICON PNG REPAIR (2026-11-26)
+Branch: fix/valid-kodi-icon-png
+PR: to be opened against main after validation.
+
+Correction to merged PR #18:
+- PR #18 was merged, but its icon.png was corrupt (PNG IDAT CRC mismatch). Its earlier description incorrectly claimed the PNG had been exported and validated; that statement was premature. Do not treat the merged PNG as usable.
+- Re-exported the existing resources/icon.svg as a 512×512 PNG. The original SVG artwork is retained unchanged: film strip, television/play symbol, popcorn graphic and TorrentioTV lettering.
+- Composited onto an opaque dark background so the resulting PNG has no alpha transparency.
+- Replaced icon.png with a newly encoded PNG. Local validation: Pillow successfully decoded the complete file; dimensions are 512×512; the indexed-color image is opaque; every PNG chunk CRC was independently checked and passed.
+- No changes to addon.xml or icon.svg. addon.xml already points to resources/icon.png.
+- No Kodi device/runtime visual test has been performed. User must install/test after merging; do not claim Kodi has displayed the icon until verified.
+
+Next:
+- Open a PR against main and leave it unmerged. User performs all merges; assistant must not merge.
