@@ -83,6 +83,17 @@ Trimite:
 
 Inainte de trimitere, elimina parole, tokenuri, chei private sau alte credențiale daca apar accidental in output. Poti masca IP-urile locale, dar pastreaza distinctia dintre IP_RECEIVER si IP_SERVER.
 
+copiezi folderul pluginului în /usr/lib/enigma2/python/Plugins/Extensions/, apoi repornești Enigma2
+
+Instalare:
+1. Extrage arhiva pe calculator.
+2. Copiază folderul TorrentioTV în /usr/lib/enigma2/python/Plugins/Extensions/ pe receptor.
+3. Repornește Enigma2.
+4. Deschide Plugins → TorrentioTV.
+5. Configurează adresa Gateway-ului și testează conexiunea.
+
+tail -50 /home/root/logs/enigma2_crash_*.log
+
 ## Criteriul tehnic
 
 Nu alegem API-ul final de player si nici compatibilitatea Python pana nu vedem versiunea reala Python, modulele Enigma2 si comportamentul HTTP Range/seek al playerului de pe acest BlackHole. Kodi si Enigma2 vor folosi acelasi gateway si acelasi WebTorrent worker; nu cream un al doilea motor sau un al doilea cache de torrent pe receiver.
