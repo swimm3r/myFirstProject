@@ -59,6 +59,8 @@ let activeTorrent = null;
 let activeFile = null;
 let activeStore = null;
 let pendingLoadResponse = null;
+let pendingLoadTimer = null;
+let activeLoadId = 0;
 let isPaused = false;
 let lastActivity = 0;
 let activeStreams = new Set();
@@ -180,21 +182,43 @@ app.post('/load', (req, res) => {
   const { magnet, fileIdx } = req.body;
   if (!magnet) return res.status(400).json({ error: 'Lipseste magnet' });
 
+  // Each /load owns a generation. Timers and async callbacks from an older
+  // request must never be allowed to stop or answer a newer request.
+  const loadId = ++activeLoadId;
+  if (pendingLoadTimer) {
+    clearTimeout(pendingLoadTimer);
+    pendingLoadTimer = null;
+  }
   stopAndClean('Incarcare torrent nou');
   pendingLoadResponse = res;
+
+  let responded = false;
+  const isCurrentLoad = () => loadId === activeLoadId;
+  const clearLoadTimer = () => {
+    if (pendingLoadTimer) {
+      clearTimeout(pendingLoadTimer);
+      pendingLoadTimer = null;
+    }
+  };
+
   res.on('close', () => {
-    if (!res.writableEnded && pendingLoadResponse === res) {
+    if (!res.writableEnded && isCurrentLoad() && pendingLoadResponse === res) {
+      responded = true;
       pendingLoadResponse = null;
+      clearLoadTimer();
       stopAndClean('Clientul a anulat pregatirea');
+      // Invalidate all callbacks belonging to this disconnected request.
+      activeLoadId++;
     }
   });
 
-  let responded = false;
-  const metaTimeout = setTimeout(() => {
-    if (!responded) {
-      responded = true;
-      pendingLoadResponse = null;
-      stopAndClean('Timeout metadate (fara seederi)');
+  pendingLoadTimer = setTimeout(() => {
+    if (!isCurrentLoad() || responded || pendingLoadResponse !== res) return;
+    responded = true;
+    pendingLoadResponse = null;
+    pendingLoadTimer = null;
+    stopAndClean('Timeout metadate (fara seederi)');
+    if (!res.headersSent && !res.destroyed) {
       res.status(504).json({ error: 'Timeout metadate torrent' });
     }
   }, 60000);
@@ -209,18 +233,17 @@ app.post('/load', (req, res) => {
 
   torrent.on('error', (err) => {
     console.error('[WORKER] Eroare torrent:', err.message);
-    if (!responded) {
-      responded = true;
-      pendingLoadResponse = null;
-      clearTimeout(metaTimeout);
-      stopAndClean('Eroare torrent');
-      res.status(500).json({ error: err.message });
-    }
+    if (!isCurrentLoad() || responded) return;
+    responded = true;
+    pendingLoadResponse = null;
+    clearLoadTimer();
+    stopAndClean('Eroare torrent');
+    if (!res.headersSent && !res.destroyed) res.status(500).json({ error: err.message });
   });
 
   torrent.on('ready', () => {
-    if (responded) return;
-    clearTimeout(metaTimeout);
+    if (!isCurrentLoad() || responded) return;
+    clearLoadTimer();
 
     torrent.files.forEach((f) => f.deselect());
 
@@ -236,25 +259,29 @@ app.post('/load', (req, res) => {
 
     console.log(`[WORKER] Pre-buffering initial ${Math.min(target.length, PREBUFFER_BYTES) / 1024 / 1024} MB...`);
     prebufferFile(target).then((bufferedBytes) => {
-      if (responded || activeTorrent !== torrent) return;
+      if (!isCurrentLoad() || responded || activeTorrent !== torrent) return;
       responded = true;
       pendingLoadResponse = null;
-      clearTimeout(metaTimeout);
+      clearLoadTimer();
       lastActivity = Date.now();
       console.log(`[WORKER] Pregatit in RAM: ${target.name} (${Math.round(target.length / 1024 / 1024)} MB); pre-buffer: ${Math.round(bufferedBytes / 1024 / 1024)} MB`);
-      res.json({
-        ready: true,
-        name: target.name,
-        size: target.length,
-        prebufferedBytes: bufferedBytes
-      });
+      if (!res.headersSent && !res.destroyed) {
+        res.json({
+          ready: true,
+          name: target.name,
+          size: target.length,
+          prebufferedBytes: bufferedBytes
+        });
+      }
     }).catch((err) => {
-      if (responded) return;
+      if (!isCurrentLoad() || responded) return;
       responded = true;
       pendingLoadResponse = null;
-      clearTimeout(metaTimeout);
+      clearLoadTimer();
       stopAndClean('Eroare la pre-buffering');
-      if (!res.headersSent) res.status(504).json({ error: 'Nu s-au putut pre-incarca datele torrentului' });
+      if (!res.headersSent && !res.destroyed) {
+        res.status(504).json({ error: 'Nu s-au putut pre-incarca datele torrentului' });
+      }
       console.error('[WORKER] Pre-buffering esuat:', err.message);
     });
   });
@@ -364,9 +391,15 @@ app.post('/resume', (req, res) => {
 });
 
 app.post('/cancel', (req, res) => {
+  // Invalidate the current load before responding: its timeout/events become inert.
+  activeLoadId++;
+  if (pendingLoadTimer) {
+    clearTimeout(pendingLoadTimer);
+    pendingLoadTimer = null;
+  }
   const pending = pendingLoadResponse;
   pendingLoadResponse = null;
-  if (pending && !pending.headersSent) {
+  if (pending && !pending.headersSent && !pending.destroyed) {
     pending.status(499).json({ error: 'Pregatirea a fost anulata' });
   }
   stopAndClean('Cancel imediat solicitat de Kodi');
@@ -374,9 +407,14 @@ app.post('/cancel', (req, res) => {
 });
 
 app.post('/stop', (req, res) => {
+  activeLoadId++;
+  if (pendingLoadTimer) {
+    clearTimeout(pendingLoadTimer);
+    pendingLoadTimer = null;
+  }
   const pending = pendingLoadResponse;
   pendingLoadResponse = null;
-  if (pending && !pending.headersSent) {
+  if (pending && !pending.headersSent && !pending.destroyed) {
     pending.status(499).json({ error: 'Redarea a fost oprita' });
   }
   stopAndClean('Comanda explicita STOP de la Kodi');
