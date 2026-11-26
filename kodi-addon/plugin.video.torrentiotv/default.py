@@ -227,9 +227,9 @@ def show_episodes(series_id, name, poster):
 
 def format_stream_label(stream):
     """Build a readable label from Torrentio's release text without guessing missing specs."""
-    source = re.sub(r'\\s+', ' ', str(stream.get('name') or 'Torrent')).strip()
-    raw_title = str(stream.get('title') or '').replace('\\r', '\\n')
-    lines = [re.sub(r'\\s+', ' ', line).strip() for line in raw_title.split('\\n')]
+    source = re.sub(r'\s+', ' ', str(stream.get('name') or 'Torrent')).strip()
+    raw_title = str(stream.get('title') or '').replace('\r', '\n')
+    lines = [re.sub(r'\s+', ' ', line).strip() for line in raw_title.split('\n')]
     lines = [line for line in lines if line]
     release = lines[0] if lines else 'Stream'
     details = ' '.join(lines)
@@ -237,19 +237,19 @@ def format_stream_label(stream):
     specs = []
     patterns = [
         (r'(?i)(2160p|1080p|720p|576p|480p)', lambda m: m.group(1).lower()),
-        (r'(?i)(?:\\bH\\.?264\\b|\\bAVC\\b|\\bx264\\b)', lambda m: 'H.264'),
-        (r'(?i)(?:\\bH\\.?265\\b|\\bHEVC\\b|\\bx265\\b)', lambda m: 'H.265'),
-        (r'(?i)\\bAV1\\b', lambda m: 'AV1'),
-        (r'(?i)\\bVP9\\b', lambda m: 'VP9'),
-        (r'(?i)\\b(?:DTS-HD\\s?MA|DTS\\s?HD\\s?MA)\\b', lambda m: 'DTS-HD MA'),
-        (r'(?i)\\bTrueHD(?:\\s?Atmos)?\\b', lambda m: 'TrueHD Atmos' if 'atmos' in m.group(0).lower() else 'TrueHD'),
-        (r'(?i)\\bAtmos\\b', lambda m: 'Atmos'),
-        (r'(?i)\\b(?:DDP|E-AC-3|EAC3)(?:\\s?\\d\\.\\d)?\\b', lambda m: 'E-AC-3'),
-        (r'(?i)\\b(?:DD|AC-3|AC3)(?:\\s?\\d\\.\\d)?\\b', lambda m: 'AC-3'),
-        (r'(?i)\\bDTS(?:\\s?\\d\\.\\d)?\\b', lambda m: 'DTS'),
-        (r'(?i)\\bAAC(?:\\s?\\d\\.\\d)?\\b', lambda m: 'AAC'),
-        (r'(?i)\\bFLAC\\b', lambda m: 'FLAC'),
-        (r'(?i)\\b(\\d+(?:[.,]\\d+)?)\\s*(GB|GiB|MB|MiB)\\b', lambda m: f"{m.group(1).replace(',', '.')} {m.group(2)}"),
+        (r'(?i)(?:\bH\.?264\b|\bAVC\b|\bx264\b)', lambda m: 'H.264'),
+        (r'(?i)(?:\bH\.?265\b|\bHEVC\b|\bx265\b)', lambda m: 'H.265'),
+        (r'(?i)\bAV1\b', lambda m: 'AV1'),
+        (r'(?i)\bVP9\b', lambda m: 'VP9'),
+        (r'(?i)\b(?:DTS-HD\s?MA|DTS\s?HD\s?MA)\b', lambda m: 'DTS-HD MA'),
+        (r'(?i)\bTrueHD(?:\s?Atmos)?\b', lambda m: 'TrueHD Atmos' if 'atmos' in m.group(0).lower() else 'TrueHD'),
+        (r'(?i)\bAtmos\b', lambda m: 'Atmos'),
+        (r'(?i)\b(?:DDP|E-AC-3|EAC3)(?:\s?\d\.\d)?\b', lambda m: 'E-AC-3'),
+        (r'(?i)\b(?:DD|AC-3|AC3)(?:\s?\d\.\d)?\b', lambda m: 'AC-3'),
+        (r'(?i)\bDTS(?:\s?\d\.\d)?\b', lambda m: 'DTS'),
+        (r'(?i)\bAAC(?:\s?\d\.\d)?\b', lambda m: 'AAC'),
+        (r'(?i)\bFLAC\b', lambda m: 'FLAC'),
+        (r'(?i)\b(\d+(?:[.,]\d+)?)\s*(GB|GiB|MB|MiB)\b', lambda m: f"{m.group(1).replace(',', '.')} {m.group(2)}"),
     ]
     for pattern, formatter in patterns:
         match = re.search(pattern, details)
