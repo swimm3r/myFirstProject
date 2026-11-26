@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import time
+import threading
+import queue
 import urllib.request
 import urllib.parse
 import xbmc
@@ -49,6 +51,25 @@ def http_post_json(url, payload=None, timeout=3):
             return resp.read()
     except Exception:
         return None
+
+
+def prepare_with_cancel(url, server_url, progress):
+    """Run prepare in the background so Kodi's Cancel button stays responsive."""
+    result_queue = queue.Queue(maxsize=1)
+
+    def request_prepare():
+        result_queue.put(http_get_json(url, timeout=130))
+
+    threading.Thread(target=request_prepare, daemon=True).start()
+    while True:
+        if progress.iscanceled():
+            http_post_json(f'{server_url}/api/cancel', timeout=1)
+            return None, True
+        try:
+            return result_queue.get(timeout=0.2), False
+        except queue.Empty:
+            progress.update(0, 'Connecting to peers and maintaining the RAM buffer...')
+
 
 
 def download_subtitle(sub_url):
@@ -266,14 +287,18 @@ def play_stream(params):
     stream_id = params.get('id', '')
 
     prog = xbmcgui.DialogProgress()
-    prog.create('TorrentioTV', 'Pre-buffering 8MB in RAM (0 SSD write)...')
+    prog.create('TorrentioTV', 'Preparing stream in RAM... Cancel stops immediately.')
 
     prep_url = f'{server}/api/prepare?hash={urllib.parse.quote(info_hash)}'
     if file_idx != '':
         prep_url += f'&fileIdx={urllib.parse.quote(file_idx)}'
 
-    res = http_get_json(prep_url, timeout=130)
+    res, was_cancelled = prepare_with_cancel(prep_url, server, prog)
     prog.close()
+
+    if was_cancelled:
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+        return
 
     if not res or not res.get('streamUrl'):
         xbmcgui.Dialog().notification('TorrentioTV', 'Failed to prebuffer peers (Timeout)', xbmcgui.NOTIFICATION_ERROR, 3500)
