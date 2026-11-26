@@ -43,9 +43,10 @@ class RingMemoryStore {
 const MAX_RAM_MB = 650;
 const IDLE_TIMEOUT_MS = 45000;
 const PAUSE_TIMEOUT_MS = 600000;
-const WINDOW_BYTES = 48 * 1024 * 1024;
-const PREBUFFER_BYTES = 24 * 1024 * 1024;
-const PREBUFFER_TIMEOUT_MS = 55000;
+const WINDOW_BYTES = 64 * 1024 * 1024;
+const PREBUFFER_BYTES = 8 * 1024 * 1024;
+const PREBUFFER_TIMEOUT_MS = 30000;
+const WINDOW_UPDATE_BYTES = 2 * 1024 * 1024;
 
 const client = new WebTorrent({
   maxConns: 30,
@@ -297,6 +298,16 @@ app.get('/raw-stream', (req, res) => {
 
   const stream = activeFile.createReadStream({ start, end });
   activeStreams.add(stream);
+  let streamedBytes = 0;
+  let nextWindowUpdate = WINDOW_UPDATE_BYTES;
+  stream.on('data', (chunk) => {
+    streamedBytes += chunk.length;
+    lastActivity = Date.now();
+    if (streamedBytes >= nextWindowUpdate) {
+      updateRamWindow(Math.min(start + streamedBytes, activeFile.length - 1));
+      nextWindowUpdate = streamedBytes + WINDOW_UPDATE_BYTES;
+    }
+  });
 
   const cleanupStream = () => {
     activeStreams.delete(stream);
