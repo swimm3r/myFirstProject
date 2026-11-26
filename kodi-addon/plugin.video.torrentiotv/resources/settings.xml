@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+  <category label="Server">
+    <setting id="rpi_ip" type="text" label="Server IP Address" default="127.0.0.1"/>
+  </category>
+</settings>
