@@ -252,9 +252,11 @@ app.get('/api/streams/:type/:id', async (req, res) => {
         // Torrentio uses emoji/symbols as metadata separators. Replace them with
         // plain-text labels so Kodi fonts without emoji support remain readable.
         const infoParts = rawInfoLine
-          .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D]+/gu, '|')
+          // Convert all Unicode symbols (including unsupported Kodi glyphs) to separators.
+          .replace(/[\p{S}\uFE0F\u200D]+/gu, '|')
+          // Collapse repeated separators and discard empty metadata fields.
           .split('|')
-          .map((part) => part.trim())
+          .map((part) => part.replace(/[\p{S}\uFE0F\u200D]+/gu, '').trim())
           .filter(Boolean);
         const infoLine = infoParts.map((part, index) => {
           if (index === 0 && /^\d+$/.test(part)) return `Seeders: ${part}`;
