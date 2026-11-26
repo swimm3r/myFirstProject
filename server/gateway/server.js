@@ -231,7 +231,7 @@ app.get('/api/streams/:type/:id', async (req, res) => {
       .filter((s) => {
         if (!s || !s.infoHash) return false;
         const fullText = `${s.name || ''} ${s.title || ''}`.toLowerCase();
-        const isTooHeavy = /2160p|4k|uhd|remux|dolby\\s*vision/.test(fullText);
+        const isTooHeavy = /2160p|4k|uhd|remux|dolby\s*vision/.test(fullText);
         return !isTooHeavy;
       })
       // Torrentio returns streams sorted by seeders; deduplicate torrent/file pairs
@@ -246,11 +246,11 @@ app.get('/api/streams/:type/:id', async (req, res) => {
       })
       .slice(0, 20)
       .map((s) => {
-        const lines = (s.title || '').split('\\n');
+        const lines = (s.title || '').split('\n');
         const mainLine = lines[0] || s.name || 'Stream';
         const infoLine = lines.slice(1).join(' | ');
         return {
-          name: (s.name || 'Torrent').replace(/\\n/g, ' '),
+          name: (s.name || 'Torrent').replace(/\n/g, ' '),
           title: infoLine ? `${mainLine} (${infoLine})` : mainLine,
           infoHash: s.infoHash,
           fileIdx: (typeof s.fileIdx === 'number') ? s.fileIdx : null
