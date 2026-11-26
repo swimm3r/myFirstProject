@@ -1,0 +1,165 @@
+PROJECT CONTINUITY / HANDOFF
+Repository: swimm3r/myFirstProject
+Last updated: 2026-11-26
+Purpose: Preserve technical context so work can continue in a fresh ChatGPT conversation.
+
+1. CRITICAL COLLABORATION RULE
+The user performs all merges into main. The assistant must NOT merge PRs.
+For every future code or documentation task:
+1) Read latest main first.
+2) Create a new branch from latest main (never start from an old feature branch).
+3) Make requested changes and validate what can be validated.
+4) Open a PR targeting main.
+5) Tell the user the PR is ready; wait for the user to merge it.
+6) After the user says a PR was merged, verify main before proceeding.
+7) Update THIS file in the same PR for every subsequent project change. Keep it current: new PRs, decisions, tests, known issues, main state.
+
+Communicate in Romanian. Be direct, kind, technically clear. The user cares deeply about this project and wants continuity across chats.
+
+2. PROJECT PURPOSE / ARCHITECTURE
+Project: myFirstProject
+GitHub: https://github.com/swimm3r/myFirstProject
+Kodi addon TorrentioTV with a Node.js / WebTorrent backend. Goal: torrent playback streamed from RAM, avoiding SSD writes.
+
+Relevant paths:
+- server/downloader/worker.js — WebTorrent worker, RAM-backed torrent storage, prebuffering, HTTP range streaming, lifecycle endpoints, /status diagnostics.
+- server/gateway/server.js — HTTP gateway/proxy between Kodi and worker; prepare, stream proxy, pause/resume/cancel/stop, status.
+- kodi-addon/plugin.video.torrentiotv/default.py — Kodi addon, prepares streams, resolves playback URL, player callbacks and diagnostics.
+
+IMPORTANT DEPLOYMENT PATH MISMATCH:
+User starts Raspberry Pi worker using:
+  node --expose-gc rpi-server/downloader/worker.js
+But repository file edited in recent PR work is:
+  server/downloader/worker.js
+User also mentioned an rpi-server gateway path. Verify deployment/copy/sync process before assuming repository changes are running on the Pi. Do not silently assume deployed tree matches repository.
+
+3. USER'S TECHNICAL GOAL / BUFFERING EXPECTATIONS
+- Playback should remain in RAM (no SSD writes).
+- Maintain a rolling buffer ahead of playback and download continuously.
+- User described a desired target of roughly 8 MB ahead.
+- Release memory for consumed pieces while retaining enough data ahead.
+- Playback previously stopped after about 29 seconds in earlier buffer experiments, and later after about 45 seconds.
+- Do not claim rolling-buffer behavior is fixed without real Kodi/WebTorrent testing on Raspberry Pi.
+- Avoid changing buffer/timeout policy while diagnosing unless evidence supports a specific fix.
+
+4. RECENT USER-REPORTED RUNTIME LOG
+User ran:
+  node --expose-gc rpi-server/downloader/worker.js
+
+Most recent log:
+  [WORKER] Ruleaza 100% in RAM pe 127.0.0.1:4001 (0 bytes pe SSD)
+  [WORKER] Oprire si eliberare RAM: Incarcare torrent nou
+  [WORKER] Conectare la peers in RAM...
+  [WORKER] Pre-buffering initial 8 MB...
+  [WORKER] Oprire si eliberare RAM: Cancel imediat solicitat de Kodi
+  [WORKER] RAM eliberat complet.
+  [WORKER] Oprire si eliberare RAM: Incarcare torrent nou
+  [WORKER] Conectare la peers in RAM...
+  [WORKER] Pre-buffering initial 8 MB...
+  [WORKER] Pregatit in RAM: The Odyssey 2026 1080p BluRay HEVC x265 5.1 BONE.mkv (4263 MB); pre-buffer: 8 MB
+  [WORKER] Oprire si eliberare RAM: Comanda explicita STOP de la Kodi
+  [WORKER] RAM eliberat complet.
+
+Interpretation:
+- Worker completed metadata/prebuffer and reported PREPARED.
+- It then received an explicit STOP from Kodi.
+- This alone does not prove torrent download failure. Correlate Kodi player callback/error, HTTP stream lifecycle/range requests, gateway disconnects, worker STOP and throughput/buffer metrics.
+- Ask user for Kodi, worker and gateway logs around the same timestamp after diagnostics are deployed.
+
+Earlier log also showed:
+  [WORKER] Oprire si eliberare RAM: Timeout metadate (fara seederi)
+  [WORKER] Uncaught Exception: Cannot set headers after they are sent to the client
+Likely cause diagnosed: stale metadata timeout from a cancelled earlier /load firing during a later load and trying to respond to an already closed HTTP response.
+
+5. PR HISTORY / CODE CHANGES
+PR #1:
+- User confirmed merged.
+- Main merge commit recorded earlier: c0500b7a75753ac0549c3bb3eb88a88143199a09.
+- Included initial 24 MB prebuffer, 55 s prebuffer timeout, 60 s metadata timeout, gateway prepare timeout 125 s, Kodi prepare timeout 130 s, range/stream improvements and keeping open streams alive during idle cleanup.
+- Later PRs may have changed these values; always inspect latest main.
+
+PR #2:
+- Branch fix/smaller-buffer-continuous-stream
+- https://github.com/swimm3r/myFirstProject/pull/2
+- Intended 8 MB prebuffer, 30 s prebuffer timeout, 64 MB piece window, dynamic window refresh every 2 MB.
+- Merge status unknown in earlier handoff. Check current PR/main if relevant.
+
+PR #3:
+- Branch fix/instant-cancel-continuous-buffer
+- https://github.com/swimm3r/myFirstProject/pull/3
+- Attempted instant Kodi cancel and rolling RAM buffer, cancel-aware Kodi background request, worker /cancel, rolling eviction.
+- Was created mergeable=false, draft=true. Merge status unknown in earlier handoff.
+
+PR #4:
+- Branch fix/cancel-stale-load-timeout
+- https://github.com/swimm3r/myFirstProject/pull/4
+- Intended to prevent a cancelled old load's metadata timer from stopping a subsequent stream.
+- Added pendingLoadTimer and activeLoadId generation guard; clears timer on ready/error/prebuffer outcomes/disconnect/cancel/stop; checks headersSent/destroyed; Cancel/Stop invalidate stale callbacks.
+- At creation it was draft and mergeable=false. Merge status not confirmed in earlier handoff. Check PR and latest main.
+
+PR #5:
+- Title: Add live torrent diagnostics and Kodi speed graphs
+- https://github.com/swimm3r/myFirstProject/pull/5
+- Branch debug/torrent-live-telemetry
+- Created draft targeting main.
+- Added diagnostics in worker, gateway and Kodi.
+- At handoff creation, fetching latest main returned blob SHAs matching the latest diagnostics branch content for all three files:
+  worker bf656f23e0df91505ab5eb871cb03b5dfa3c23c5
+  gateway 3ccf95a414852470f579e985d5b1dc1ef984fd73
+  Kodi 2b14a392d08565953cc6d49609922b1546dae939
+- Diagnostics branch could no longer be compared (GitHub returned NOT_FOUND), suggesting branch may have been deleted after integration. Do NOT infer PR merge status solely from this. Verify PR #5 status when resuming.
+- Latest main contained diagnostics at those paths; do not reapply blindly.
+
+6. DIAGNOSTICS PRESENT IN LATEST MAIN (VERIFIED 2026-11-26)
+Worker (server/downloader/worker.js):
+- Timestamped diagnostic logs with session ID.
+- Events: LOAD_REQUEST, TORRENT_READY, PREBUFFER_READY, STREAM_REQUEST, STREAM_CLEANUP, KODI_PAUSE, KODI_RESUME, KODI_CANCEL, KODI_STOP, STOP_AND_CLEAN.
+- METRICS every 5 seconds.
+- /status includes active torrent/file, playback offset/time, download/upload B/s, peers, connections, torrent progress, downloaded/uploaded bytes, piece length, RAM store bytes/pieces, active streams, stream request count, last stream event, idle duration, RAM MB.
+- RAM store tracks byte count incrementally.
+- bufferAheadBytes estimates contiguous cached piece bytes ahead of playback.
+- STOP log includes Kodi reason and position forwarded by gateway.
+
+Gateway (server/gateway/server.js):
+- Timestamped gatewayLog helper.
+- Request lifecycle middleware for API and video route.
+- /api/status proxies worker /status.
+- Logs Kodi pause/resume/cancel/stop.
+- Logs upstream stream headers, content range/length, bytes, duration, end/abort, proxy errors, client disconnect/finish.
+- Forwards Kodi STOP reason/position to worker.
+
+Kodi (kodi-addon/plugin.video.torrentiotv/default.py):
+- Logs player start/pause/resume/stopped/ended/error callbacks.
+- STOP request includes callback reason and last playback position.
+- Shows DialogProgressBG diagnostics while playing.
+- Displays playback position, DL/UL speed, peers, RAM, buffer-ahead MB, active streams, connections, download sparkline and buffer sparkline.
+- Logs structured metrics every 5 seconds.
+
+Validation before PR #5:
+- Worker and gateway JavaScript syntax checked successfully.
+- Python Kodi addon not runtime-tested in Kodi; no Python syntax test recorded.
+- No runtime validation on Raspberry Pi / WebTorrent / Kodi.
+- Check Kodi DialogProgressBG.update signature: current code calls diag.update(0, 'TorrentioTV LIVE\\n' + msg) as a two-argument form. If display fails, inspect this first.
+- bufferAheadBytes is a contiguous piece-cache estimate, not a guarantee every requested byte range is readable; compare with HTTP range behavior.
+- /api/status is polled once per second during Kodi playback; watch for overhead.
+- Confirm WINDOW_BYTES is defined and status safe when no torrent/store exists.
+- Kodi background dialog is a rolling text sparkline, not a full historical chart.
+
+7. NEXT STEPS
+1) Verify PR #5 state and current main commit. Inspect PRs #2, #3, #4 if relevant.
+2) Verify user merged diagnostics and deployed exact worker/gateway/addon files to Raspberry Pi. Resolve rpi-server vs server path mismatch.
+3) Ask user to reproduce with same torrent.
+4) Collect synchronized logs: Kodi (callbacks, METRICS, errors); gateway (HTTP_IN/OUT, upstream headers/end/abort/client disconnect, STOP); worker (LOAD/PREBUFFER, METRICS, STREAM_REQUEST/CLEANUP, KODI_STOP, STOP_AND_CLEAN).
+5) Correlate timestamps and session ID. Determine whether Kodi emits onPlayBackError/onPlayBackStopped, whether HTTP client closes, ranges advance, peers/speed collapse, and buffer ahead drains to zero.
+6) Make smallest evidence-based fix. Do not change buffering policy speculatively.
+7) Every future PR MUST update this PROJECT_CONTINUITY.txt in the same PR with branch/PR, changes, validation, test status, logs, diagnosis and next step.
+8) Always branch from latest main. User performs merges.
+
+8. LAST VERIFIED MAIN FILE BLOBS
+At handoff creation, latest main returned:
+- server/downloader/worker.js: bf656f23e0df91505ab5eb871cb03b5dfa3c23c5
+- server/gateway/server.js: 3ccf95a414852470f579e985d5b1dc1ef984fd73
+- kodi-addon/plugin.video.torrentiotv/default.py: 2b14a392d08565953cc6d49609922b1546dae939
+- README.md: 09b6be357e1ecf13dea086def01568e156988072
+
+PROJECT_CONTINUITY.txt did not exist on main when checked. It is being introduced on a new branch based on the latest main.
