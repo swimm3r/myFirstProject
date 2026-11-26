@@ -259,12 +259,10 @@ app.get('/api/streams/:type/:id', async (req, res) => {
           .map((part) => part.replace(/[\p{S}\uFE0F\u200D]+/gu, '').trim())
           .filter(Boolean);
         const infoLine = infoParts.map((part, index) => {
-          if (index === 0 && /^\d+$/.test(part)) return `Seeders: ${part}`;
+          // Only label fields whose meaning is clear from their value.
+          // Do not guess that arbitrary text is a source: it may be the file name.
+          if (index === 0 && /^\d+$/.test(part)) return `Seeds: ${part}`;
           if (/^\d+(?:\.\d+)?\s*(?:GB|MB|TB)$/i.test(part)) return `Size: ${part}`;
-          if (index === infoParts.length - 1 && /^[a-z0-9.-]+$/i.test(part) &&
-              !/(?:\d{3,4}p|x26[45]|hevc|av1|hdr|dolby|aac|dts)/i.test(part)) {
-            return `Source: ${part}`;
-          }
           return part;
         }).join(' | ');
         return {
