@@ -365,8 +365,11 @@ def play_stream(params):
     player = TorrentioPlayer(server, history_payload)
     monitor = xbmc.Monitor()
 
-    diag = xbmcgui.DialogProgressBG()
-    diag.create('TorrentioTV diagnostics', 'Waiting for playback...')
+    debug_display = ADDON.getSetting('debug_display') == 'true'
+    diag = None
+    if debug_display:
+        diag = xbmcgui.DialogProgressBG()
+        diag.create('TorrentioTV diagnostics', 'Waiting for playback...')
     speed_samples = []
     buffer_samples = []
     last_status_log = 0
@@ -391,17 +394,34 @@ def play_stream(params):
         speed_samples = speed_samples[-24:]
         buffer_samples = buffer_samples[-24:]
 
-        msg = (
-            f"Pos: {player.last_pos:.0f}s | DL: {format_rate(speed)} | "
-            f"UL: {format_rate(worker.get('uploadBytesPerSecond', 0))} | Peers: {peers}\n"
-            f"RAM: {worker.get('ramMB', '?')} MB | Buffer ahead: {store_mb:.1f} MB | "
-            f"Streams: {worker.get('activeStreams', 0)} | Conexiuni: {worker.get('connections', 0)}\n"
-            f"DL grafic: {sparkline(speed_samples)}\n"
-            f"RAM buffer: {sparkline(buffer_samples)}\n"
-            f"Offset: {int(worker.get('playbackOffset', 0)) / 1024 / 1024:.1f} MB | "
-            f"Idle: {worker.get('idleForMs', '?')} ms"
-        )
-        diag.update(0, 'TorrentioTV LIVE\n' + msg)
+        if diag:
+            display_parts = []
+            if ADDON.getSetting('debug_show_position') == 'true':
+                display_parts.append(f"Pos {player.last_pos:.0f}s")
+            if ADDON.getSetting('debug_show_download') == 'true':
+                display_parts.append(f"DL {format_rate(speed)}")
+            if ADDON.getSetting('debug_show_upload') == 'true':
+                display_parts.append(f"UL {format_rate(worker.get('uploadBytesPerSecond', 0))}")
+            if ADDON.getSetting('debug_show_peers') == 'true':
+                display_parts.append(f"Peers {peers}")
+            if ADDON.getSetting('debug_show_ram') == 'true':
+                display_parts.append(f"RAM {worker.get('ramMB', '?')}MB")
+            if ADDON.getSetting('debug_show_buffer') == 'true':
+                display_parts.append(f"Buffer {store_mb:.1f}MB")
+            if ADDON.getSetting('debug_show_streams') == 'true':
+                display_parts.append(f"Streams {worker.get('activeStreams', 0)}")
+            if ADDON.getSetting('debug_show_connections') == 'true':
+                display_parts.append(f"Conn {worker.get('connections', 0)}")
+            if ADDON.getSetting('debug_show_download_graph') == 'true':
+                display_parts.append(f"DL[{sparkline(speed_samples, 12)}]")
+            if ADDON.getSetting('debug_show_buffer_graph') == 'true':
+                display_parts.append(f"RAM[{sparkline(buffer_samples, 12)}]")
+            if ADDON.getSetting('debug_show_offset') == 'true':
+                display_parts.append(f"Offset {int(worker.get('playbackOffset', 0)) / 1024 / 1024:.1f}MB")
+            if ADDON.getSetting('debug_show_idle') == 'true':
+                display_parts.append(f"Idle {worker.get('idleForMs', '?')}ms")
+            display_text = ' | '.join(display_parts) if display_parts else '(nimic selectat)'
+            diag.update(0, 'TorrentioTV LIVE | ' + display_text)
         if time.time() - last_status_log >= 5:
             xbmc.log('[TorrentioTV][METRICS] ' + json.dumps({
                 'position': player.last_pos, 'downloadBps': speed,
@@ -413,7 +433,8 @@ def play_stream(params):
         if monitor.waitForAbort(1.0):
             break
 
-    diag.close()
+    if diag:
+        diag.close()
     xbmc.log(f'[TorrentioTV][PLAYER] Playback loop ended; isPlaying={player.isPlaying()}, position={player.last_pos:.1f}s', xbmc.LOGWARNING)
     player._notify_stop()
 
