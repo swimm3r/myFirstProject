@@ -28,7 +28,7 @@ def get_server_url():
 
 def http_get_json(url, timeout=6):
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-TorrentioTV/2.0'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-TorrentioTV/2.1'})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode('utf-8'))
     except Exception as e:
@@ -42,7 +42,7 @@ def http_post_json(url, payload=None, timeout=3):
         req = urllib.request.Request(
             url,
             data=data,
-            headers={'Content-Type': 'application/json', 'User-Agent': 'Kodi-TorrentioTV/2.0'},
+            headers={'Content-Type': 'application/json', 'User-Agent': 'Kodi-TorrentioTV/2.1'},
             method='POST'
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -55,7 +55,7 @@ def download_subtitle(sub_url):
     if not sub_url:
         return None
     try:
-        req = urllib.request.Request(sub_url, headers={'User-Agent': 'Kodi-TorrentioTV/2.0'})
+        req = urllib.request.Request(sub_url, headers={'User-Agent': 'Kodi-TorrentioTV/2.1'})
         with urllib.request.urlopen(req, timeout=4) as resp:
             content = resp.read(524288)
             if len(content) < 50:
@@ -266,17 +266,17 @@ def play_stream(params):
     stream_id = params.get('id', '')
 
     prog = xbmcgui.DialogProgress()
-    prog.create('TorrentioTV', 'Connecting to peers in RAM (0 SSD write)...')
+    prog.create('TorrentioTV', 'Pre-buffering 24MB in RAM (0 SSD write)...')
 
     prep_url = f'{server}/api/prepare?hash={urllib.parse.quote(info_hash)}'
     if file_idx != '':
         prep_url += f'&fileIdx={urllib.parse.quote(file_idx)}'
 
-    res = http_get_json(prep_url, timeout=30)
+    res = http_get_json(prep_url, timeout=40)
     prog.close()
 
     if not res or not res.get('streamUrl'):
-        xbmcgui.Dialog().notification('TorrentioTV', 'Failed to connect to peers (Timeout)', xbmcgui.NOTIFICATION_ERROR, 3500)
+        xbmcgui.Dialog().notification('TorrentioTV', 'Failed to prebuffer peers (Timeout)', xbmcgui.NOTIFICATION_ERROR, 3500)
         xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
 

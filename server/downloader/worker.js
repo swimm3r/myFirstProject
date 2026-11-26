@@ -12,21 +12,25 @@ process.on('unhandledRejection', (err) => {
   console.error('[WORKER] Unhandled Rejection:', err);
 });
 
-const MAX_RAM_MB = 350;
-const IDLE_TIMEOUT_MS = 15000;
-const PAUSE_TIMEOUT_MS = 600000;
-const WINDOW_BYTES = 48 * 1024 * 1024;
+const MAX_RAM_MB = 650;
+const IDLE_TIMEOUT_MS = 180000;
+const PAUSE_TIMEOUT_MS = 900000;
+const PREBUFFER_BYTES = 24 * 1024 * 1024;
+const TARGET_AHEAD_BYTES = 96 * 1024 * 1024;
+const REFILL_THRESHOLD_BYTES = 64 * 1024 * 1024;
+const KEEP_BEHIND_BYTES = 16 * 1024 * 1024;
 
 const client = new WebTorrent({
-  maxConns: 30,
+  maxConns: 55,
   uploadLimit: 51200,
-  utp: false
+  utp: true
 });
 
 let activeTorrent = null;
 let activeFile = null;
 let isPaused = false;
 let lastActivity = 0;
+let lastByteOffset = 0;
 let activeStreams = new Set();
 
 function closeAllStreams() {
@@ -41,12 +45,16 @@ function stopAndClean(reason) {
   closeAllStreams();
   isPaused = false;
   lastActivity = 0;
+  lastByteOffset = 0;
 
   if (activeTorrent) {
     const t = activeTorrent;
     activeTorrent = null;
     activeFile = null;
     try {
+      if (t.store && Array.isArray(t.store.chunks)) {
+        t.store.chunks.length = 0;
+      }
       t.destroy({ destroyStore: true }, () => {
         if (global.gc) {
           try { global.gc(); } catch (e) {}
@@ -59,6 +67,61 @@ function stopAndClean(reason) {
   }
 }
 
+function manageRamBuffer(byteOffset) {
+  if (!activeTorrent || !activeFile) return;
+  try {
+    lastByteOffset = byteOffset;
+    const pieceLen = activeTorrent.pieceLength;
+    const fileStartPiece = Math.floor(activeFile.offset / pieceLen);
+    const fileEndPiece = Math.floor((activeFile.offset + activeFile.length - 1) / pieceLen);
+
+    const headProtectPieces = Math.max(2, Math.ceil((1024 * 1024) / pieceLen));
+    const tailProtectPieces = Math.max(3, Math.ceil((2 * 1024 * 1024) / pieceLen));
+    const headEnd = Math.min(fileEndPiece, fileStartPiece + headProtectPieces);
+    const tailStart = Math.max(fileStartPiece, fileEndPiece - tailProtectPieces);
+
+    activeTorrent.select(fileStartPiece, headEnd, true);
+    activeTorrent.select(tailStart, fileEndPiece, true);
+
+    const currentPiece = Math.floor((activeFile.offset + byteOffset) / pieceLen);
+    const keepBehindPieces = Math.ceil(KEEP_BEHIND_BYTES / pieceLen);
+    const targetAheadPieces = Math.ceil(TARGET_AHEAD_BYTES / pieceLen);
+    const refillPieces = Math.ceil(REFILL_THRESHOLD_BYTES / pieceLen);
+
+    const dropStart = headEnd + 1;
+    const dropUntil = Math.min(tailStart - 1, currentPiece - keepBehindPieces);
+    if (dropUntil > dropStart) {
+      activeTorrent.deselect(dropStart, dropUntil, false);
+      if (activeTorrent.store && activeTorrent.store.chunks) {
+        for (let p = dropStart; p < dropUntil; p++) {
+          if (activeTorrent.store.chunks[p]) {
+            activeTorrent.store.chunks[p] = null;
+          }
+        }
+      }
+    }
+
+    const maxCheckPiece = Math.min(fileEndPiece, currentPiece + targetAheadPieces);
+    let consecutiveReady = 0;
+    for (let p = currentPiece; p <= maxCheckPiece; p++) {
+      if (activeTorrent.bitfield && activeTorrent.bitfield.get(p)) {
+        consecutiveReady++;
+      } else {
+        break;
+      }
+    }
+
+    if (consecutiveReady >= targetAheadPieces) {
+      const pauseStart = currentPiece + targetAheadPieces;
+      if (tailStart - 1 >= pauseStart) {
+        activeTorrent.deselect(pauseStart, tailStart - 1, false);
+      }
+    } else if (consecutiveReady < refillPieces && maxCheckPiece >= currentPiece) {
+      activeTorrent.select(currentPiece, maxCheckPiece, true);
+    }
+  } catch (e) {}
+}
+
 setInterval(() => {
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
   if (rssMB > MAX_RAM_MB) {
@@ -66,38 +129,21 @@ setInterval(() => {
     return;
   }
 
-  if (!activeTorrent || lastActivity === 0) return;
-
-  const idleFor = Date.now() - lastActivity;
-  if (!isPaused && idleFor > IDLE_TIMEOUT_MS) {
-    stopAndClean('Inactivitate Kodi > 15 secunde (Dead-man switch)');
-  } else if (isPaused && idleFor > PAUSE_TIMEOUT_MS) {
-    stopAndClean('Pauza prelungita > 10 minute');
-  }
-}, 3000);
-
-function updateRamWindow(byteOffset) {
   if (!activeTorrent || !activeFile) return;
-  try {
-    const pieceLen = activeTorrent.pieceLength;
-    const fileStartPiece = Math.floor(activeFile.offset / pieceLen);
-    const fileEndPiece = Math.floor((activeFile.offset + activeFile.length - 1) / pieceLen);
 
-    const currentPiece = Math.floor((activeFile.offset + byteOffset) / pieceLen);
-    const windowPieces = Math.ceil(WINDOW_BYTES / pieceLen);
+  if (!isPaused) {
+    manageRamBuffer(lastByteOffset);
+  }
 
-    const keepBehindPieces = Math.ceil((16 * 1024 * 1024) / pieceLen);
-    const dropUntil = currentPiece - keepBehindPieces;
-    if (dropUntil > fileStartPiece) {
-      activeTorrent.deselect(fileStartPiece, dropUntil, false);
-    }
+  if (lastActivity === 0) return;
+  const idleFor = Date.now() - lastActivity;
 
-    const endPriority = Math.min(fileEndPiece, currentPiece + windowPieces);
-    if (endPriority >= currentPiece) {
-      activeTorrent.select(currentPiece, endPriority, true);
-    }
-  } catch (e) {}
-}
+  if (!isPaused && idleFor > IDLE_TIMEOUT_MS) {
+    stopAndClean('Inactivitate Kodi > 3 minute (Dead-man switch)');
+  } else if (isPaused && idleFor > PAUSE_TIMEOUT_MS) {
+    stopAndClean('Pauza prelungita > 15 minute');
+  }
+}, 2000);
 
 app.post('/load', (req, res) => {
   const { magnet, fileIdx } = req.body;
@@ -109,10 +155,10 @@ app.post('/load', (req, res) => {
   const metaTimeout = setTimeout(() => {
     if (!responded) {
       responded = true;
-      stopAndClean('Timeout metadate (25s - fara seederi)');
-      res.status(504).json({ error: 'Timeout metadate torrent' });
+      stopAndClean('Timeout conectare/prebuffer (35s - prea putini seederi)');
+      res.status(504).json({ error: 'Timeout prebuffer torrent' });
     }
-  }, 25000);
+  }, 35000);
 
   console.log('[WORKER] Conectare la peers in RAM...');
   const torrent = client.add(magnet, {
@@ -134,8 +180,6 @@ app.post('/load', (req, res) => {
 
   torrent.on('ready', () => {
     if (responded) return;
-    responded = true;
-    clearTimeout(metaTimeout);
 
     torrent.files.forEach((f) => f.deselect());
 
@@ -145,16 +189,45 @@ app.post('/load', (req, res) => {
 
     activeFile = target;
     lastActivity = Date.now();
+    lastByteOffset = 0;
     isPaused = false;
 
-    updateRamWindow(0);
+    manageRamBuffer(0);
 
-    console.log(`[WORKER] Pregatit in RAM: ${target.name} (${Math.round(target.length / 1024 / 1024)} MB)`);
-    res.json({
-      ready: true,
-      name: target.name,
-      size: target.length
-    });
+    const pieceLen = torrent.pieceLength;
+    const fileStartPiece = Math.floor(target.offset / pieceLen);
+    const fileEndPiece = Math.floor((target.offset + target.length - 1) / pieceLen);
+    const neededPrebufferPieces = Math.min(
+      fileEndPiece - fileStartPiece + 1,
+      Math.max(4, Math.ceil(PREBUFFER_BYTES / pieceLen))
+    );
+
+    const checkPrebuffer = setInterval(() => {
+      if (responded || activeTorrent !== torrent) {
+        clearInterval(checkPrebuffer);
+        return;
+      }
+      let readyCount = 0;
+      for (let p = fileStartPiece; p < fileStartPiece + neededPrebufferPieces; p++) {
+        if (torrent.bitfield && torrent.bitfield.get(p)) {
+          readyCount++;
+        } else {
+          break;
+        }
+      }
+      if (readyCount >= neededPrebufferPieces) {
+        clearInterval(checkPrebuffer);
+        responded = true;
+        clearTimeout(metaTimeout);
+        lastActivity = Date.now();
+        console.log(`[WORKER] Prebuffer 24MB gata in RAM: ${target.name}`);
+        res.json({
+          ready: true,
+          name: target.name,
+          size: target.length
+        });
+      }
+    }, 400);
   });
 });
 
@@ -195,7 +268,7 @@ app.get('/raw-stream', (req, res) => {
       return res.end();
     }
 
-    updateRamWindow(start);
+    manageRamBuffer(start);
 
     const chunkSize = (end - start) + 1;
     res.writeHead(206, {
@@ -205,7 +278,7 @@ app.get('/raw-stream', (req, res) => {
       'Content-Type': 'video/x-matroska'
     });
   } else {
-    updateRamWindow(0);
+    manageRamBuffer(0);
     res.writeHead(200, {
       'Accept-Ranges': 'bytes',
       'Content-Length': fileSize,
@@ -249,6 +322,7 @@ app.post('/pause', (req, res) => {
 app.post('/resume', (req, res) => {
   isPaused = false;
   lastActivity = Date.now();
+  manageRamBuffer(lastByteOffset);
   console.log('[WORKER] Kodi -> RESUME');
   res.json({ ok: true });
 });

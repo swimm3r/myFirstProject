@@ -1,6 +1,6 @@
 {
   "name": "torrentio-ram-streamer",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "100% RAM-based P2P HTTP Streamer for Kodi",
   "dependencies": {
     "express": "^4.18.2",

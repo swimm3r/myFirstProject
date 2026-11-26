@@ -286,7 +286,7 @@ app.get('/api/prepare', async (req, res) => {
         magnet,
         fileIdx: (fileIdx !== undefined && fileIdx !== '' && fileIdx !== 'null') ? Number(fileIdx) : undefined
       })
-    }, 28000);
+    }, 38000);
 
     if (!r.ok) {
       const errData = await r.json().catch(() => ({}));
@@ -301,7 +301,7 @@ app.get('/api/prepare', async (req, res) => {
       fileName: info.name
     });
   } catch (e) {
-    res.status(504).json({ error: 'Timeout conectare la peers' });
+    res.status(504).json({ error: 'Timeout conectare/prebuffer' });
   }
 });
 
