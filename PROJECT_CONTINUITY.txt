@@ -287,3 +287,10 @@ Commits on branch:
 Next:
 - Open PR against main and leave it unmerged for the user.
 - After the user merges and installs the updated Kodi add-on, verify settings visibility, per-field selection, one-line rendering and normal playback.
+
+Correction to Kodi debug settings visibility (2026-11-26):
+- Follow-up fix in the same PR removed an invalid legacy settings separator element (type="sep") that had been inserted between the master debug toggle and its dependent options.
+- The dependent settings now immediately follow the master toggle, so visible="eq(-1,true)" through visible="eq(-12,true)" all reference the master toggle at the correct relative positions.
+- Kodi legacy settings documentation specifies type="lsep" for a label separator; no separator is needed here.
+- Commit: 8f2471fc21805b648d5d9d831c7000ac00432dbe.
+- Still requires validation in the actual Kodi settings UI; no device runtime test has yet been performed.
