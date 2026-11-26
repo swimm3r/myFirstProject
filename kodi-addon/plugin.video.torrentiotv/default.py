@@ -401,7 +401,7 @@ def play_stream(params):
             f"Offset: {int(worker.get('playbackOffset', 0)) / 1024 / 1024:.1f} MB | "
             f"Idle: {worker.get('idleForMs', '?')} ms"
         )
-        diag.update(0, 'TorrentioTV LIVE', msg)
+        diag.update(0, 'TorrentioTV LIVE\n' + msg)
         if time.time() - last_status_log >= 5:
             xbmc.log('[TorrentioTV][METRICS] ' + json.dumps({
                 'position': player.last_pos, 'downloadBps': speed,
