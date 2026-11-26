@@ -15,12 +15,17 @@ class RingMemoryStore {
   constructor(chunkLength, opts = {}) {
     this.chunkLength = chunkLength;
     this.chunks = new Map();
+    this.bytes = 0;
     activeStore = this;
     this.closed = false;
   }
   put(index, buf, cb = () => {}) {
     if (this.closed) return cb(new Error('Store closed'));
-    this.chunks.set(index, Buffer.from(buf));
+    const previous = this.chunks.get(index);
+    if (previous) this.bytes -= previous.length;
+    const copy = Buffer.from(buf);
+    this.chunks.set(index, copy);
+    this.bytes += copy.length;
     cb(null);
   }
   get(index, opts, cb) {
@@ -34,10 +39,14 @@ class RingMemoryStore {
   }
   evictBefore(minIndex) {
     for (const key of this.chunks.keys()) {
-      if (key < minIndex) this.chunks.delete(key);
+      if (key < minIndex) {
+        const chunk = this.chunks.get(key);
+        if (chunk) this.bytes -= chunk.length;
+        this.chunks.delete(key);
+      }
     }
   }
-  close(cb = () => {}) { this.chunks.clear(); this.closed = true; cb(null); }
+  close(cb = () => {}) { this.chunks.clear(); this.bytes = 0; this.closed = true; cb(null); }
   destroy(cb = () => {}) { this.close(cb); }
 }
 
@@ -77,8 +86,7 @@ function diag(event, details = {}) {
 
 function getDiagnostics() {
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
-  const storeBytes = activeStore && activeStore.chunks
-    ? Array.from(activeStore.chunks.values()).reduce((sum, chunk) => sum + chunk.length, 0) : 0;
+  const storeBytes = activeStore ? activeStore.bytes : 0;
   return {
     timestamp: Date.now(),
     sessionId: diagnosticSessionId,
@@ -118,7 +126,10 @@ function closeAllStreams() {
 }
 
 function stopAndClean(reason) {
-  if (reason) console.log(`[WORKER] Oprire si eliberare RAM: ${reason}`);
+  if (reason) {
+    diag('STOP_AND_CLEAN', { reason, state: getDiagnostics() });
+    console.log(`[WORKER] Oprire si eliberare RAM: ${reason}`);
+  }
   closeAllStreams();
   isPaused = false;
   lastActivity = 0;
