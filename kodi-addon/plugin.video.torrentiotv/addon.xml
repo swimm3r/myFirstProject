@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="plugin.video.torrentiotv" name="TorrentioTV" version="2.1.0" provider-name="User">
+<addon id="plugin.video.torrentiotv" name="TorrentioTV" version="2.1.1" provider-name="User">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
     </requires>
@@ -11,7 +11,7 @@
         <description lang="en">Streams 1080p/720p torrents from local RAM gateway with zero SSD writes.</description>
         <platform>all</platform>
         <assets>
-            <icon>resources/icon.svg</icon>
+            <icon>resources/icon.png</icon>
         </assets>
     </extension>
 </addon>
