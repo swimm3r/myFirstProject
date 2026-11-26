@@ -68,7 +68,7 @@ def prepare_with_cancel(url, server_url, progress):
                 target=http_post_json,
                 args=(f'{server_url}/api/cancel',),
                 kwargs={'timeout': 1},
-                daemon=True
+                daemon=False
             ).start()
             return None, True
         try:
