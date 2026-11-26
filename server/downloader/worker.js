@@ -128,9 +128,8 @@ function updateRamWindow(byteOffset) {
     const dropUntil = currentPiece - keepBehindPieces;
     if (dropUntil > fileStartPiece) {
       activeTorrent.deselect(fileStartPiece, dropUntil, false);
-      if (activeTorrent.store && typeof activeTorrent.store.evictBefore === 'function') {
-        activeTorrent.store.evictBefore(dropUntil);
-      }
+      // Keep downloaded pieces in the store: WebTorrent may still request them
+      // after a backward seek. Deselecting stops prioritizing them without deleting data.
     }
 
     const endPriority = Math.min(fileEndPiece, currentPiece + windowPieces);
@@ -205,8 +204,6 @@ app.post('/load', (req, res) => {
 
   torrent.on('ready', () => {
     if (responded) return;
-    responded = true;
-    clearTimeout(metaTimeout);
 
     torrent.files.forEach((f) => f.deselect());
 
@@ -246,7 +243,7 @@ app.post('/load', (req, res) => {
 
 function parseByteRange(header, fileSize) {
   if (!header) return { start: 0, end: fileSize - 1, partial: false };
-  if (!/^bytes=\\d*-\\d*$/.test(header.trim()) || header.includes(',')) return null;
+  if (!/^bytes=\d*-\d*$/.test(header.trim()) || header.includes(',')) return null;
   const value = header.trim().slice(6);
   const [left, right] = value.split('-');
   let start;
