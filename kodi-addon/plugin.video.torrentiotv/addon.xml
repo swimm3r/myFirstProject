@@ -10,5 +10,8 @@
         <summary lang="en">P2P RAM Streamer Client via Torrentio</summary>
         <description lang="en">Streams 1080p/720p torrents from local RAM gateway with zero SSD writes.</description>
         <platform>all</platform>
+        <assets>
+            <icon>resources/icon.svg</icon>
+        </assets>
     </extension>
 </addon>
