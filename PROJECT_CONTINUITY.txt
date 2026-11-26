@@ -287,3 +287,32 @@ Commits on branch:
 Next:
 - Open PR against main and leave it unmerged for the user.
 - After the user merges and installs the updated Kodi add-on, verify settings visibility, per-field selection, one-line rendering and normal playback.
+
+
+13. README DOCUMENTATION REFRESH (2026-11-26)
+Branch:
+- docs/transform-readme
+- Created directly from latest main (the branch was created with base_ref=main).
+- Target: main. User performs all merges; do not merge.
+
+Changes:
+- Replaced the 17-byte placeholder README.md with a full project guide.
+- Documented the actual three-part architecture: Kodi add-on, Node.js gateway and WebTorrent worker.
+- Added Mermaid architecture and playback-sequence diagrams.
+- Explained the RAM-backed RingMemoryStore, removal of WebTorrent's default full-torrent selection, 8 MiB pre-buffer, 64 MiB rolling selection window, 8 MiB rewind cushion, 4 MiB segmented reads, manual backpressure and lifecycle cleanup.
+- Documented repository layout, actual startup commands/ports, Kodi ZIP installation, settings, user flow, diagnostics, API routes, operational caveats and troubleshooting.
+- Explicitly qualified the "zero SSD writes" claim: torrent payload storage is RAM-backed, but subtitle downloads are written to Kodi's temporary directory and other system/application I/O is outside this guarantee.
+- Documented the deployment path mismatch: repository worker is server/downloader/worker.js; a previously used Raspberry Pi command referenced rpi-server/downloader/worker.js.
+- Added trusted-network warning because the gateway API currently has no authentication.
+- README uses implementation defaults verified in current main worker.js; these are documented as defaults, not guarantees.
+
+Validation / scope:
+- Read current main repository tree, PROJECT_CONTINUITY.txt, README.txt, server/package.json, worker.js, gateway/server.js, Kodi default.py, addon.xml and settings.xml.
+- README content reflects the current source layout and current implementation defaults.
+- Documentation-only change; no application code changed and no runtime playback test was required or performed.
+- README.md update commit on branch: 062143cebf90fb7095a3209d0aca3c584dbbb073.
+- PROJECT_CONTINUITY.txt is updated in the same branch/PR as required.
+- PR creation and final diff review remain to be completed.
+
+Next:
+- Review the README/continuity diff, open a PR targeting main, and leave it unmerged for the user.
