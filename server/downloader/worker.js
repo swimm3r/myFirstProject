@@ -57,6 +57,8 @@ const WINDOW_BYTES = 64 * 1024 * 1024;
 const PREBUFFER_BYTES = 8 * 1024 * 1024;
 const PREBUFFER_TIMEOUT_MS = 30000;
 const WINDOW_UPDATE_BYTES = 1 * 1024 * 1024;
+// Bound each WebTorrent FileStream selection; keep the HTTP response continuous.
+const STREAM_SEGMENT_BYTES = 4 * 1024 * 1024;
 // Keep this priority distinct from FileStream's priority=1 selections.
 const RAM_WINDOW_PRIORITY = 2;
 
@@ -429,7 +431,7 @@ function parseByteRange(header, fileSize) {
     end = fileSize - 1;
   } else {
     start = Number(left);
-    end = right === '' ? Math.min(start + 16 * 1024 * 1024 - 1, fileSize - 1) : Number(right);
+    end = right === '' ? fileSize - 1 : Number(right);
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= fileSize || start > end) return null;
     end = Math.min(end, fileSize - 1);
   }
@@ -464,51 +466,213 @@ app.head('/raw-stream', (req, res) => {
 
 app.get('/raw-stream', (req, res) => {
   if (!activeFile) return res.status(404).send('Niciun fisier activ');
+
+  const file = activeFile;
+  const torrent = activeTorrent;
   const range = sendStreamHeaders(req, res);
   if (!range) return;
-  const { start, end } = range;
 
-  streamRequestCount++;
-  lastStreamEventAt = Date.now();
+  const { start, end } = range;
+  const requestId = ++streamRequestCount;
+  const streamStartedAt = Date.now();
+
+  lastStreamEventAt = streamStartedAt;
   lastPlaybackOffset = start;
-  diag('STREAM_REQUEST', { request: streamRequestCount, method: req.method, range: req.headers.range || null, start, end, requestedBytes: end - start + 1 });
-  const stream = activeFile.createReadStream({ start, end });
-  activeStreams.add(stream);
+  diag('STREAM_REQUEST', {
+    request: requestId,
+    method: req.method,
+    range: req.headers.range || null,
+    start,
+    end,
+    requestedBytes: end - start + 1,
+    segmented: true,
+    segmentBytes: STREAM_SEGMENT_BYTES,
+    backpressure: 'manual'
+  });
+
+  let cursor = start;
   let streamedBytes = 0;
   let nextWindowUpdate = WINDOW_UPDATE_BYTES;
-  stream.on('data', (chunk) => {
-    streamedBytes += chunk.length;
-    lastPlaybackOffset = start + streamedBytes;
-    lastStreamEventAt = Date.now();
-    lastActivity = Date.now();
-    if (streamedBytes >= nextWindowUpdate) {
-      updateRamWindow(Math.min(start + streamedBytes, activeFile.length - 1));
-      nextWindowUpdate = streamedBytes + WINDOW_UPDATE_BYTES;
-    }
-  });
+  let segmentsCompleted = 0;
+  let currentStream = null;
+  let sessionClosed = false;
+  let waitingForDrain = false;
+  let segmentAdvancePending = false;
+  let drainHandler = null;
 
-  const streamStartedAt = Date.now();
-  const cleanupStream = () => {
-    activeStreams.delete(stream);
-    diag('STREAM_CLEANUP', { request: streamRequestCount, streamedBytes, durationMs: Date.now() - streamStartedAt, activeStreams: activeStreams.size });
-    try { stream.destroy(); } catch (e) {}
+  const logCleanup = (reason) => {
+    diag('STREAM_CLEANUP', {
+      request: requestId,
+      streamedBytes,
+      segmentsCompleted,
+      durationMs: Date.now() - streamStartedAt,
+      activeStreams: activeStreams.size,
+      reason
+    });
   };
 
-  stream.on('error', () => {
-    cleanupStream();
-    if (!res.headersSent) res.status(500).end();
-    else res.end();
-  });
+  const closeSession = (reason, responseAction) => {
+    if (sessionClosed) return;
+    sessionClosed = true;
 
-  res.on('close', () => {
-    if (!res.writableEnded) {
-      cleanupStream();
-    } else {
-      activeStreams.delete(stream);
+    if (drainHandler) {
+      res.removeListener('drain', drainHandler);
+      drainHandler = null;
     }
+
+    const stream = currentStream;
+    currentStream = null;
+    if (stream && !stream.destroyed) {
+      try { stream.destroy(); } catch (e) {}
+    }
+
+    activeStreams.delete(session);
+    logCleanup(reason);
+
+    if (responseAction === 'destroy' && !res.destroyed) {
+      res.destroy();
+    } else if (responseAction === 'end' && !res.destroyed && !res.writableEnded) {
+      res.end();
+    }
+  };
+
+  // Track the HTTP response, not each short-lived WebTorrent FileStream.
+  // This stays in activeStreams across every bounded segment.
+  const session = {
+    destroy: () => closeSession('closed by worker lifecycle', 'destroy')
+  };
+  activeStreams.add(session);
+
+  res.once('finish', () => closeSession('HTTP response finished'));
+  res.once('close', () => {
+    if (!res.writableFinished) closeSession('HTTP client disconnected');
+    else closeSession('HTTP response closed after finish');
   });
 
-  stream.pipe(res);
+  const onDrain = () => {
+    waitingForDrain = false;
+    drainHandler = null;
+    if (sessionClosed) return;
+
+    if (currentStream && !currentStream.destroyed) {
+      currentStream.resume();
+    } else if (segmentAdvancePending) {
+      segmentAdvancePending = false;
+      pumpNextSegment();
+    }
+  };
+
+  function failStream(reason, err, segmentStart, segmentEnd) {
+    diag('STREAM_SEGMENT_ERROR', {
+      request: requestId,
+      reason,
+      message: err ? err.message : null,
+      segmentStart,
+      segmentEnd,
+      streamedBytes,
+      segmentsCompleted
+    });
+    closeSession(reason, 'destroy');
+  }
+
+  function pumpNextSegment() {
+    if (sessionClosed || res.destroyed || res.writableEnded) return;
+
+    // Do not let an old request continue against a replacement torrent.
+    if (activeTorrent !== torrent || activeFile !== file || torrent.destroyed) {
+      closeSession('torrent replaced while streaming', 'destroy');
+      return;
+    }
+
+    if (cursor > end) {
+      // Only the HTTP response ends here, after the complete requested range.
+      res.end();
+      return;
+    }
+
+    const segmentStart = cursor;
+    const segmentEnd = Math.min(end, segmentStart + STREAM_SEGMENT_BYTES - 1);
+    updateRamWindow(segmentStart);
+
+    let stream;
+    try {
+      stream = file.createReadStream({ start: segmentStart, end: segmentEnd });
+    } catch (err) {
+      failStream('could not create WebTorrent segment', err, segmentStart, segmentEnd);
+      return;
+    }
+
+    currentStream = stream;
+    let segmentEnded = false;
+
+    stream.on('data', (chunk) => {
+      if (sessionClosed) return;
+      if (res.destroyed || res.writableEnded) {
+        closeSession('HTTP response is no longer writable');
+        return;
+      }
+
+      streamedBytes += chunk.length;
+      lastPlaybackOffset = start + streamedBytes;
+      lastStreamEventAt = Date.now();
+      lastActivity = Date.now();
+
+      while (streamedBytes >= nextWindowUpdate) {
+        updateRamWindow(Math.min(start + streamedBytes, file.length - 1));
+        nextWindowUpdate += WINDOW_UPDATE_BYTES;
+      }
+
+      let canContinue;
+      try {
+        canContinue = res.write(chunk);
+      } catch (err) {
+        failStream('HTTP response write failed', err, segmentStart, segmentEnd);
+        return;
+      }
+
+      if (!canContinue && !waitingForDrain) {
+        waitingForDrain = true;
+        stream.pause();
+        drainHandler = onDrain;
+        res.once('drain', drainHandler);
+      }
+    });
+
+    stream.once('end', () => {
+      segmentEnded = true;
+    });
+
+    stream.once('error', (err) => {
+      failStream('WebTorrent FileStream error', err, segmentStart, segmentEnd);
+    });
+
+    stream.once('close', () => {
+      if (sessionClosed) return;
+      if (!segmentEnded) {
+        diag('STREAM_SEGMENT_CLOSED_EARLY', {
+          request: requestId,
+          segmentStart,
+          segmentEnd,
+          streamedBytes,
+          segmentsCompleted
+        });
+        closeSession('WebTorrent segment closed before end', 'destroy');
+        return;
+      }
+
+      if (currentStream === stream) currentStream = null;
+      cursor = segmentEnd + 1;
+      segmentsCompleted++;
+
+      // streamx Readable.pipe() always ends its destination on source end;
+      // we consume data manually so the HTTP response survives segment changes.
+      // Also wait for the HTTP writable to drain before opening another segment.
+      if (waitingForDrain) segmentAdvancePending = true;
+      else pumpNextSegment();
+    });
+  }
+
+  pumpNextSegment();
 });
 
 app.post('/pause', (req, res) => {
