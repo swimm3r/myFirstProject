@@ -461,3 +461,109 @@ Validation / limitations:
 Next:
 - Open PR against main and leave it unmerged.
 - User runs the script on the VU+ Solo2 and shares /tmp/vu_solo2_inventory.txt (after removing any credentials), then we select the Enigma2 API/player based on observed runtime and test actual HTTP Range/seek behavior.
+
+
+17. ENIGMA2 CLIENT PROJECT STARTED — SINGLE-CLIENT RULE (2026-11-26)
+
+User-confirmed hard requirements:
+- Do not change or destabilize existing working functionality.
+- Kodi remains supported and must continue to work.
+- Kodi and Enigma2 are alternative frontends. They must NOT be used as two
+  simultaneous clients for the same TorrentioTV backend.
+- At most one client may own/control the active TorrentioTV playback session:
+  Kodi OR Enigma2, never both at once.
+- Keep one shared Node.js Gateway, one WebTorrent Worker, one torrent session,
+  and one authoritative RAM-backed store/rolling-window implementation.
+- No duplicate torrent engine, no receiver-side torrent download, and no second
+  application-level media cache on the VU+ Solo2.
+- The user performs all merges. Never merge a PR.
+
+Latest repository inspection / branch:
+- Read latest main's PROJECT_CONTINUITY.txt, README.md, README.txt,
+  server/package.json, server/gateway/server.js, Kodi default.py and addon.xml
+  before starting this implementation.
+- Created branch feature/enigma2-solo2-client directly from base_ref=main.
+- All Enigma2 work is isolated on this branch. No Kodi, Gateway or Worker
+  application code has been modified in this milestone.
+- Gateway routes confirmed in current main include catalog, metadata, streams,
+  subtitles, history, prepare, status, pause, resume, cancel, stop and /video.mkv.
+- Gateway /api/status returns { gatewayTime, worker }; /api/prepare returns
+  { streamUrl, fileName }. Existing lifecycle routes are shared by Kodi.
+- Existing Kodi client uses the same Gateway and handles playback callbacks,
+  history and lifecycle requests. Do not copy Kodi-specific xbmc modules into
+  Enigma2.
+
+Confirmed Solo2 inventory supplied by the user:
+- VU+ Solo2, BlackHole 3.1.0.I build 202010051929 / version 202010051923.
+- Linux 3.13.5, MIPS GNU/Linux, Broadcom BCM7346B2 / BMIPS5000 dual-core.
+- Python 2.7.9 at /usr/bin/python; Python 3 is absent.
+- Enigma2 experimental-git20121128-r192-bh157-bsp31.
+- Enigma2 modules exist under /usr/lib/enigma2/python, including Screens.Screen,
+  Screens.InfoBar, Components.ActionMap, Components.ServiceEventTracker,
+  ServiceReference, Navigation and Plugins.Plugin.
+- GStreamer 1.4.5 and relevant playback, souphttpsrc, matroska, subparse,
+  app and DVB sink packages are installed.
+- gst-launch-1.0 and gst-inspect-1.0 exist. exteplayer3, ffmpeg and curl CLI
+  are absent. libcurl package and wget are present.
+- RAM total approximately 559 MiB; available memory at inventory time ~442 MiB.
+  Root filesystem had ~32.5 MiB free; /media/hdd had ~293.6 GiB free.
+- The initial shell import test failed because PYTHONPATH omitted
+  /usr/lib/enigma2/python. The follow-up import test with PYTHONPATH was proposed;
+  its result is not yet recorded.
+- Native Enigma2 playback, HTTP Range/206, seeking, pause/resume, subtitles and
+  playback callbacks are NOT yet verified. GStreamer package presence is not
+  proof of successful native MKV/HTTP playback.
+- Do not install Node.js, WebTorrent, ServiceApp or exteplayer3 on the receiver
+  as part of discovery.
+
+Milestone 1 implementation on feature/enigma2-solo2-client:
+- Added enigma2-plugin/plugin.extensions.torrentiotv/ as an isolated frontend.
+- Added __init__.py, api.py, plugin.py and README.md.
+- api.py uses Python 2.7-compatible urllib2/urlparse/json and stores the
+  configured Gateway base URL in /etc/enigma2/torrentiotv.conf.
+- plugin.py adds a native Enigma2 Plugins-menu screen with remote-control
+  navigation, Gateway URL configuration and an asynchronous /api/status check
+  so network requests do not block the UI.
+- The prototype reports Gateway/Worker reachability and basic session metrics.
+- This milestone is diagnostic-only: it does not call /api/prepare, does not
+  start or stop a torrent, does not invoke playback, and does not change any
+  backend/Kodi code.
+- README.md documents manual developer installation and current limitations.
+
+Single-client enforcement design constraint:
+- The existing worker is a single active torrent/session engine, but the
+  current Gateway API has no explicit cross-client ownership/lease token.
+  Therefore, merely adding a second frontend does not yet prove that two UI
+  clients cannot issue competing commands.
+- Do NOT implement an independent lock in the Enigma2 plugin: it would not
+  coordinate with Kodi and could falsely claim exclusivity.
+- Before enabling playback in Enigma2, design a backward-compatible
+  single-owner/session-lease mechanism at the shared Gateway boundary and
+  integrate both frontends only if required. Preserve existing Kodi workflows;
+  make the smallest compatible change and regression-test Kodi. If safe
+  backward-compatible enforcement cannot be achieved without changing Kodi,
+  stop and ask the user before that change.
+- Until shared ownership is implemented and tested, operational rule is to
+  close/stop one client before opening the other. Never test both simultaneously.
+
+Validation status / next steps:
+1) Review the new plugin source for Python 2.7 syntax and Enigma2 API compatibility.
+2) Run the import probe on the receiver with
+   PYTHONPATH=/usr/lib/enigma2/python and confirm the plugin can load.
+3) Install the diagnostic prototype manually and test Gateway URL configuration
+   plus /api/status. This must not start a torrent.
+4) Test native playback separately using a controlled LAN media URL, then the
+   actual gateway /video.mkv endpoint. Capture Range request/response headers.
+5) Verify seek, pause/resume, stop, end/error callbacks and subtitles on Solo2.
+6) Design and test the shared single-client ownership mechanism before exposing
+   any Enigma2 prepare/play action.
+7) Implement catalog/details/episodes/streams/history and playback only in
+   isolated Enigma2 modules, reusing existing Gateway response shapes.
+8) Regression-test Kodi and update README.md plus this file in the same PR.
+9) Open a PR targeting main and leave it unmerged for the user.
+
+Validation limitations:
+- No Python 2 interpreter or Enigma2 runtime is available in the development
+  environment. No claim of receiver compatibility or native playback success
+  is made from static source creation alone.
+- No Gateway/Worker/Kodi files were changed. No torrent session was started.
