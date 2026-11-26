@@ -220,26 +220,3 @@ Fix branch: fix/remove-webtorrent-default-full-selection
 - No claim that playback is fixed until the user deploys and tests. User performs all merges; assistant must not merge.
 
 Historical-status clarification: the earlier section 9 entry describing PR #7 as the current open fix is superseded. At this task's start, `main` was verified at 75bf0c024bb96faac02865fac7be10bf0325eab1 and already contained the rolling-selection tracking changes from PR #7. The present branch was created from that exact `main` tip.
-
-
-11. FIX PROPOSED: CONTINUOUS HTTP RANGE STREAMING WITHOUT WHOLE-FILE SELECTION (2026-11-26)
-Evidence from the user's synchronized Raspberry Pi logs:
-- Kodi requested GET /video.mkv with Range: bytes=0-.
-- Worker parsed this open-ended Range as only bytes 0-16777215 (16 MiB), returning Content-Length 16777216 and Content-Range bytes 0-16777215/1702305907.
-- Gateway correctly proxied the finite 206 response and logged STREAM_UPSTREAM_END after exactly 16 MiB. No subsequent Range request arrived from Kodi.
-- Kodi continued playing buffered data until approximately 36.9 seconds, then emitted onPlayBackEnded and sent POST /api/stop.
-- Worker metrics showed playbackOffset stuck at 16 MiB, activeStreams=0, and no new stream requests. RAM remained bounded (~95 MB store, 259-300 MB RSS), so the earlier full-torrent RAM growth is no longer present in this run.
-Diagnosis:
-- The 16 MiB cap for an open-ended Range is not HTTP Range semantics. Range: bytes=0- means bytes 0 through EOF. This artificial cap causes a premature end-of-file after the first response.
-- Simply changing the response to cover the full multi-GB range would be unsafe if implemented with one File.createReadStream(): WebTorrent FileStream creates a selection for its entire requested interval, which would defeat the rolling RAM window.
-Implementation in branch fix/continuous-range-streaming:
-- Parse an open-ended byte range through fileSize - 1, preserving explicit bounded and suffix ranges.
-- Keep one HTTP response open, but read it through sequential 4 MiB File.createReadStream segments. Each WebTorrent stream therefore selects only a bounded segment rather than the whole file.
-- Continue updating the tracked 64 MiB rolling RAM window as bytes are emitted (1 MiB update threshold), retaining the 8 MiB rewind cushion and existing RAM watchdog.
-- Log segment-level early close/errors and final stream cleanup for diagnosis.
-- Gateway and Kodi files are unchanged; gateway remains a transparent proxy.
-Validation status:
-- Code has been prepared against main commit bc8d4921bb364fa3a071664cb7c0e800817cf107.
-- Static syntax/runtime validation and Raspberry Pi/Kodi playback validation remain to be performed. Do not claim playback is fixed until the user deploys the merged worker to the actual rpi-server/downloader/worker.js path and tests it.
-- The user performs all merges; do not merge this PR.
-Next step: review PR diff, validate Node syntax and segment lifecycle, then deploy/test with synchronized worker, gateway and Kodi logs. Expected behavior: Range bytes=0- reports the full remaining file length, worker keeps one active HTTP response while processing bounded FileStream segments, and playbackOffset/rolling window advance throughout playback without storeBytes growing with the entire torrent.
