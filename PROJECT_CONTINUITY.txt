@@ -395,3 +395,50 @@ Current status:
 - No Solo2 device test has been performed; exact BlackHole build/Python/Enigma2 runtime and player capabilities remain unknown pending the user's inspection.
 - The user is not available to inspect the receiver immediately. Continue with repository/backend design and compatibility research without requiring immediate device access; defer image-specific assumptions and final playback integration until the exact build is confirmed.
 - This documentation update is being prepared on branch docs/vu-solo2-enigma2-roadmap, created from latest main commit aaeb6c93010125591c8b246ebcab9e296ea752d1. Target main; user performs all merges.
+
+
+15. CONFIRMED VU+ SOLO2 / BLACKHOLE TARGET RUNTIME (2026-11-26)
+
+User supplied the receiver's About/System information:
+- Hardware: VU+ Solo2.
+- System OE: 3.0.
+- Firmware: BlackHole 3.1.0.I (2021-10-01-master).
+- Kernel / Drivers: 3.13.5 / 20190429.r0.
+
+This supersedes the previous uncertainty about the image family/build. The exact image is BlackHole 3.1.0.I, not OpenBH. The receiver's Python interpreter version, Enigma2 build/API details, installed playback components and GStreamer capabilities have NOT yet been directly queried. Do not mark those as verified from the OE label alone.
+
+Compatibility implications / working assumptions:
+- Treat this as a legacy OE 3.0 Enigma2 environment on the VU+ Solo2, not a modern OE/ Python 3-only image.
+- Historical BlackHole/Vu+ OE 3.0 plugin ecosystem material categorizes plugins for this environment under Python 2. Therefore, until verified on the receiver, write compatibility research and any first prototype conservatively for Python 2.7 syntax/API compatibility; do not use f-strings, annotations, async/await, pathlib, dataclasses or Python-3-only standard-library APIs.
+- This is a compatibility precaution, NOT confirmation that this exact installed build's interpreter is Python 2.7. Confirm with the device (e.g. python --version, python2 --version, python3 --version where present) before finalizing packaging/runtime requirements.
+- Kernel 3.13.5 and the 20190429 driver build are legacy. Avoid assuming modern TLS/certificate stores, modern system libraries or recent GStreamer features. Probe what is actually installed.
+- Keep Node.js/WebTorrent off the Solo2. The receiver is a thin Enigma2 client; all torrent peers, source resolution, RAM-backed store, rolling window, prebuffer and HTTP stream serving remain on the existing backend host.
+- Native playback should initially be tested with the Enigma2 default service/player stack. ServiceApp/exteplayer3 may be optional add-ons, not assumed present. The historical BlackHole 3.1.0 release notes describe these as external plugins, so detect availability and keep the first compatibility path independent of them.
+- The native player must be tested against the gateway's HTTP URL with Range requests, seeking, pause/resume and long playback. Do not assume that HTTP playback implies correct byte-range seeking.
+- Plugin packaging and installation method must match the image's actual Python/Enigma2 package conventions. Minimize dependencies; prefer Python standard library modules already shipped with the image.
+
+Immediate technical discovery checklist (can be performed before writing full UI):
+1) On the receiver, inspect:
+   - python --version and python2 --version / python3 --version if present.
+   - opkg list-installed | grep -E '^(enigma2|python|gst|serviceapp|exteplayer3)' (adapt if grep/opkg syntax differs).
+   - /usr/bin/enigma2 build/version and available Python modules.
+   - Whether ServiceApp and exteplayer3 are installed; do not install them just for discovery.
+2) Inspect native player and protocol behavior:
+   - Test playback of a small known HTTP media URL from the LAN.
+   - Test the actual TorrentioTV gateway /video.mkv URL.
+   - Capture request headers at gateway/worker to verify Range: bytes=..., 206 Partial Content, Content-Range, and whether requests continue over segment boundaries.
+   - Test seek forward/back, pause/resume, stop, playback end/error callbacks.
+3) Confirm the receiver can reach the gateway host/port over LAN and record the configured gateway base URL. Do not expose the unauthenticated gateway outside a trusted LAN.
+4) Based on these observations, choose the Enigma2 service reference/player API and package metadata; do not hardcode an optional player dependency.
+
+Architecture decision remains unchanged:
+- Kodi and Enigma2 are two frontends for the same TorrentioTV backend.
+- Existing Node.js gateway + WebTorrent worker are the sole streaming engine.
+- Torrentio/source discovery, torrent selection, RAM-only torrent store, rolling buffer, prebuffer, byte-range serving, history and lifecycle remain shared.
+- The Solo2 plugin must not download torrent pieces itself or maintain a second application-level RAM/file cache.
+
+Current status update:
+- Target receiver and exact image are now confirmed by the user: VU+ Solo2, BlackHole 3.1.0.I, OE 3.0, kernel 3.13.5, drivers 20190429.r0.
+- Python version, Enigma2 build/API, GStreamer/player availability, package manager state and actual HTTP Range behavior remain unverified.
+- No Enigma2 plugin code or receiver-side installation has been performed yet.
+- This update is documentation-only and is prepared on branch docs/confirm-solo2-blackhole-runtime, created from the latest main commit. User performs all merges; do not merge.
