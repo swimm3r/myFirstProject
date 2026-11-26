@@ -272,7 +272,7 @@ def play_stream(params):
     if file_idx != '':
         prep_url += f'&fileIdx={urllib.parse.quote(file_idx)}'
 
-    res = http_get_json(prep_url, timeout=40)
+    res = http_get_json(prep_url, timeout=130)
     prog.close()
 
     if not res or not res.get('streamUrl'):
