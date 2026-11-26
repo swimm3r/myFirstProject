@@ -15,12 +15,17 @@ class RingMemoryStore {
   constructor(chunkLength, opts = {}) {
     this.chunkLength = chunkLength;
     this.chunks = new Map();
+    this.bytes = 0;
     activeStore = this;
     this.closed = false;
   }
   put(index, buf, cb = () => {}) {
     if (this.closed) return cb(new Error('Store closed'));
-    this.chunks.set(index, Buffer.from(buf));
+    const previous = this.chunks.get(index);
+    if (previous) this.bytes -= previous.length;
+    const copy = Buffer.from(buf);
+    this.chunks.set(index, copy);
+    this.bytes += copy.length;
     cb(null);
   }
   get(index, opts, cb) {
@@ -34,10 +39,14 @@ class RingMemoryStore {
   }
   evictBefore(minIndex) {
     for (const key of this.chunks.keys()) {
-      if (key < minIndex) this.chunks.delete(key);
+      if (key < minIndex) {
+        const chunk = this.chunks.get(key);
+        if (chunk) this.bytes -= chunk.length;
+        this.chunks.delete(key);
+      }
     }
   }
-  close(cb = () => {}) { this.chunks.clear(); this.closed = true; cb(null); }
+  close(cb = () => {}) { this.chunks.clear(); this.bytes = 0; this.closed = true; cb(null); }
   destroy(cb = () => {}) { this.close(cb); }
 }
 
@@ -64,6 +73,63 @@ let activeLoadId = 0;
 let isPaused = false;
 let lastActivity = 0;
 let activeStreams = new Set();
+let diagnosticSessionId = null;
+let playbackStartedAt = 0;
+let lastPlaybackOffset = 0;
+let streamRequestCount = 0;
+let lastStreamEventAt = 0;
+
+function diag(event, details = {}) {
+  const stamp = new Date().toISOString();
+  console.log(`[WORKER][${stamp}][${diagnosticSessionId || 'no-session'}] ${event} ${JSON.stringify(details)}`);
+}
+
+function getDiagnostics() {
+  const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+  const storeBytes = activeStore ? activeStore.bytes : 0;
+  let bufferAheadBytes = 0;
+  if (activeTorrent && activeFile && activeStore && activeStore.chunks && activeTorrent.pieceLength) {
+    const pieceLength = activeTorrent.pieceLength;
+    const currentPiece = Math.floor((activeFile.offset + lastPlaybackOffset) / pieceLength);
+    const fileEndPiece = Math.floor((activeFile.offset + activeFile.length - 1) / pieceLength);
+    const maxPieces = Math.ceil(WINDOW_BYTES / pieceLength);
+    for (let i = currentPiece; i <= Math.min(fileEndPiece, currentPiece + maxPieces); i++) {
+      const chunk = activeStore.chunks.get(i);
+      if (!chunk) break;
+      bufferAheadBytes += chunk.length;
+    }
+  }
+  return {
+    timestamp: Date.now(),
+    sessionId: diagnosticSessionId,
+    active: !!(activeTorrent && activeFile),
+    paused: isPaused,
+    name: activeFile ? activeFile.name : null,
+    fileSize: activeFile ? activeFile.length : 0,
+    playbackOffset: lastPlaybackOffset,
+    playbackSeconds: playbackStartedAt ? Math.round((Date.now() - playbackStartedAt) / 1000) : 0,
+    downloadBytesPerSecond: activeTorrent ? activeTorrent.downloadSpeed : 0,
+    uploadBytesPerSecond: activeTorrent ? activeTorrent.uploadSpeed : 0,
+    peers: activeTorrent ? activeTorrent.numPeers : 0,
+    connections: activeTorrent ? activeTorrent.numConns : 0,
+    torrentProgress: activeTorrent ? activeTorrent.progress : 0,
+    downloadedBytes: activeTorrent ? activeTorrent.downloaded : 0,
+    uploadedBytes: activeTorrent ? activeTorrent.uploaded : 0,
+    pieceLength: activeTorrent ? activeTorrent.pieceLength : 0,
+    storeBytes,
+    bufferAheadBytes,
+    storePieces: activeStore && activeStore.chunks ? activeStore.chunks.size : 0,
+    activeStreams: activeStreams.size,
+    streamRequestCount,
+    lastStreamEventAt,
+    idleForMs: lastActivity ? Date.now() - lastActivity : null,
+    ramMB: rssMB
+  };
+}
+
+setInterval(() => {
+  if (activeTorrent) diag('METRICS', getDiagnostics());
+}, 5000);
 
 function closeAllStreams() {
   for (const s of activeStreams) {
@@ -73,7 +139,10 @@ function closeAllStreams() {
 }
 
 function stopAndClean(reason) {
-  if (reason) console.log(`[WORKER] Oprire si eliberare RAM: ${reason}`);
+  if (reason) {
+    diag('STOP_AND_CLEAN', { reason, state: getDiagnostics() });
+    console.log(`[WORKER] Oprire si eliberare RAM: ${reason}`);
+  }
   closeAllStreams();
   isPaused = false;
   lastActivity = 0;
@@ -185,6 +254,12 @@ app.post('/load', (req, res) => {
   // Each /load owns a generation. Timers and async callbacks from an older
   // request must never be allowed to stop or answer a newer request.
   const loadId = ++activeLoadId;
+  diagnosticSessionId = `${Date.now().toString(36)}-${loadId}`;
+  playbackStartedAt = 0;
+  lastPlaybackOffset = 0;
+  streamRequestCount = 0;
+  lastStreamEventAt = Date.now();
+  diag('LOAD_REQUEST', { loadId, fileIdx, hasMagnet: !!magnet });
   if (pendingLoadTimer) {
     clearTimeout(pendingLoadTimer);
     pendingLoadTimer = null;
@@ -242,6 +317,7 @@ app.post('/load', (req, res) => {
   });
 
   torrent.on('ready', () => {
+    diag('TORRENT_READY', { files: torrent.files.length, peers: torrent.numPeers, pieceLength: torrent.pieceLength, downloaded: torrent.downloaded });
     if (!isCurrentLoad() || responded) return;
     clearLoadTimer();
 
@@ -264,6 +340,8 @@ app.post('/load', (req, res) => {
       pendingLoadResponse = null;
       clearLoadTimer();
       lastActivity = Date.now();
+      playbackStartedAt = Date.now();
+      diag('PREBUFFER_READY', { name: target.name, fileBytes: target.length, prebufferBytes: bufferedBytes, peers: torrent.numPeers, downloadBytesPerSecond: torrent.downloadSpeed });
       console.log(`[WORKER] Pregatit in RAM: ${target.name} (${Math.round(target.length / 1024 / 1024)} MB); pre-buffer: ${Math.round(bufferedBytes / 1024 / 1024)} MB`);
       if (!res.headersSent && !res.destroyed) {
         res.json({
@@ -340,12 +418,18 @@ app.get('/raw-stream', (req, res) => {
   if (!range) return;
   const { start, end } = range;
 
+  streamRequestCount++;
+  lastStreamEventAt = Date.now();
+  lastPlaybackOffset = start;
+  diag('STREAM_REQUEST', { request: streamRequestCount, method: req.method, range: req.headers.range || null, start, end, requestedBytes: end - start + 1 });
   const stream = activeFile.createReadStream({ start, end });
   activeStreams.add(stream);
   let streamedBytes = 0;
   let nextWindowUpdate = WINDOW_UPDATE_BYTES;
   stream.on('data', (chunk) => {
     streamedBytes += chunk.length;
+    lastPlaybackOffset = start + streamedBytes;
+    lastStreamEventAt = Date.now();
     lastActivity = Date.now();
     if (streamedBytes >= nextWindowUpdate) {
       updateRamWindow(Math.min(start + streamedBytes, activeFile.length - 1));
@@ -353,8 +437,10 @@ app.get('/raw-stream', (req, res) => {
     }
   });
 
+  const streamStartedAt = Date.now();
   const cleanupStream = () => {
     activeStreams.delete(stream);
+    diag('STREAM_CLEANUP', { request: streamRequestCount, streamedBytes, durationMs: Date.now() - streamStartedAt, activeStreams: activeStreams.size });
     try { stream.destroy(); } catch (e) {}
   };
 
@@ -376,6 +462,7 @@ app.get('/raw-stream', (req, res) => {
 });
 
 app.post('/pause', (req, res) => {
+  diag('KODI_PAUSE', getDiagnostics());
   isPaused = true;
   lastActivity = Date.now();
   closeAllStreams();
@@ -384,6 +471,7 @@ app.post('/pause', (req, res) => {
 });
 
 app.post('/resume', (req, res) => {
+  diag('KODI_RESUME', getDiagnostics());
   isPaused = false;
   lastActivity = Date.now();
   console.log('[WORKER] Kodi -> RESUME');
@@ -391,6 +479,7 @@ app.post('/resume', (req, res) => {
 });
 
 app.post('/cancel', (req, res) => {
+  diag('KODI_CANCEL', getDiagnostics());
   // Invalidate the current load before responding: its timeout/events become inert.
   activeLoadId++;
   if (pendingLoadTimer) {
@@ -407,6 +496,7 @@ app.post('/cancel', (req, res) => {
 });
 
 app.post('/stop', (req, res) => {
+  diag('KODI_STOP', { reason: req.body && req.body.reason, position: req.body && req.body.position, state: getDiagnostics() });
   activeLoadId++;
   if (pendingLoadTimer) {
     clearTimeout(pendingLoadTimer);
@@ -422,18 +512,9 @@ app.post('/stop', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
+  const diagnostics = getDiagnostics();
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
-  if (!activeTorrent || !activeFile) {
-    return res.json({ active: false, ramMB: rssMB });
-  }
-  res.json({
-    active: true,
-    paused: isPaused,
-    ramMB: rssMB,
-    name: activeFile.name,
-    speedKB: Math.round(activeTorrent.downloadSpeed / 1024),
-    peers: activeTorrent.numPeers
-  });
+  res.json({ ...diagnostics, speedKB: Math.round((diagnostics.downloadBytesPerSecond || 0) / 1024), ramMB: rssMB });
 });
 
 app.listen(4001, '127.0.0.1', () => {
