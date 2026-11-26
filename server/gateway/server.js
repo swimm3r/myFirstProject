@@ -358,16 +358,35 @@ app.post('/api/cancel', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/stop', async (req, res) => {
-  gatewayLog('KODI_STOP_RECEIVED', req.body || {});
-  try {
-    await fetchWithTimeout(`${WORKER_URL}/stop`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body || {})
-    }, 1000);
-  } catch (e) {}
-  res.json({ ok: true });
+app.post('/api/stop', (req, res) => {
+  const receivedAt = Date.now();
+  const payload = req.body || {};
+  gatewayLog('KODI_STOP_RECEIVED', payload);
+
+  // Acknowledge Kodi immediately. Worker cleanup is dispatched independently,
+  // so neither torrent destruction nor a slow local HTTP round-trip blocks Kodi.
+  res.json({ ok: true, accepted: true });
+
+  setImmediate(async () => {
+    const workerStartedAt = Date.now();
+    try {
+      const workerRes = await fetchWithTimeout(`${WORKER_URL}/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }, 1500);
+      gatewayLog('KODI_STOP_WORKER_ACK', {
+        status: workerRes.status,
+        gatewayDispatchMs: workerStartedAt - receivedAt,
+        totalMs: Date.now() - receivedAt
+      });
+    } catch (e) {
+      gatewayLog('KODI_STOP_WORKER_ERROR', {
+        error: e.message,
+        totalMs: Date.now() - receivedAt
+      });
+    }
+  });
 });
 
 app.all('/video.mkv', (req, res) => {
