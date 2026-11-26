@@ -5,6 +5,22 @@ const http = require('http');
 const app = express();
 app.use(express.json());
 
+function gatewayLog(event, details = {}) {
+  console.log(`[GATEWAY][${new Date().toISOString()}] ${event} ${JSON.stringify(details)}`);
+}
+
+app.use((req, res, next) => {
+  if (/^\/api\/(prepare|pause|resume|cancel|stop|status)$/.test(req.path) || req.path === '/video.mkv') {
+    const started = Date.now();
+    gatewayLog('HTTP_IN', { method: req.method, path: req.path, range: req.headers.range || null, client: req.ip });
+    res.on('finish', () => gatewayLog('HTTP_OUT', { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - started }));
+    res.on('close', () => {
+      if (!res.writableEnded) gatewayLog('HTTP_CLIENT_CLOSE', { method: req.method, path: req.path, durationMs: Date.now() - started });
+    });
+  }
+  next();
+});
+
 process.on('uncaughtException', (err) => {
   console.error('[GATEWAY] Uncaught Exception:', err.message);
 });
@@ -305,7 +321,20 @@ app.get('/api/prepare', async (req, res) => {
   }
 });
 
+app.get('/api/status', async (req, res) => {
+  try {
+    const workerRes = await fetchWithTimeout(`${WORKER_URL}/status`, {}, 2500);
+    const workerStatus = await workerRes.json();
+    res.json({ gatewayTime: Date.now(), worker: workerStatus });
+  } catch (e) {
+    gatewayLog('STATUS_ERROR', { error: e.message });
+    res.status(502).json({ error: e.message, worker: null });
+  }
+});
+
 app.post('/api/pause', async (req, res) => {
+  gatewayLog('KODI_PAUSE_RECEIVED');
+
   try {
     await fetchWithTimeout(`${WORKER_URL}/pause`, { method: 'POST' }, 3000);
   } catch (e) {}
@@ -313,6 +342,7 @@ app.post('/api/pause', async (req, res) => {
 });
 
 app.post('/api/resume', async (req, res) => {
+  gatewayLog('KODI_RESUME_RECEIVED');
   try {
     await fetchWithTimeout(`${WORKER_URL}/resume`, { method: 'POST' }, 3000);
   } catch (e) {}
@@ -320,6 +350,7 @@ app.post('/api/resume', async (req, res) => {
 });
 
 app.post('/api/cancel', async (req, res) => {
+  gatewayLog('KODI_CANCEL_RECEIVED');
   // Cancel the worker-side torrent/prebuffer request immediately.
   try {
     await fetchWithTimeout(`${WORKER_URL}/cancel`, { method: 'POST' }, 1000);
@@ -328,6 +359,7 @@ app.post('/api/cancel', async (req, res) => {
 });
 
 app.post('/api/stop', async (req, res) => {
+  gatewayLog('KODI_STOP_RECEIVED');
   try {
     await fetchWithTimeout(`${WORKER_URL}/stop`, { method: 'POST' }, 1000);
   } catch (e) {}
@@ -342,6 +374,8 @@ app.all('/video.mkv', (req, res) => {
   req.setTimeout(0);
   res.setTimeout(0);
 
+  const proxyStarted = Date.now();
+  let proxyBytes = 0;
   const options = {
     hostname: WORKER_HOST,
     port: WORKER_PORT,
@@ -351,6 +385,10 @@ app.all('/video.mkv', (req, res) => {
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
+    gatewayLog('STREAM_UPSTREAM_HEADERS', { status: proxyRes.statusCode, range: req.headers.range || null, contentLength: proxyRes.headers['content-length'] || null, contentRange: proxyRes.headers['content-range'] || null });
+    proxyRes.on('data', chunk => { proxyBytes += chunk.length; });
+    proxyRes.on('end', () => gatewayLog('STREAM_UPSTREAM_END', { bytes: proxyBytes, durationMs: Date.now() - proxyStarted }));
+    proxyRes.on('aborted', () => gatewayLog('STREAM_UPSTREAM_ABORTED', { bytes: proxyBytes, durationMs: Date.now() - proxyStarted }));
     res.writeHead(proxyRes.statusCode, proxyRes.headers);
     if (req.method === 'HEAD') {
       res.end();
@@ -360,14 +398,18 @@ app.all('/video.mkv', (req, res) => {
     }
   });
 
-  proxyReq.on('error', () => {
+  proxyReq.on('error', (err) => {
+    gatewayLog('STREAM_PROXY_ERROR', { error: err.message, bytes: proxyBytes, durationMs: Date.now() - proxyStarted });
     if (!res.headersSent) res.status(502).end();
     else res.end();
   });
 
   res.on('close', () => {
     if (!res.writableEnded) {
+      gatewayLog('STREAM_CLIENT_DISCONNECT', { bytes: proxyBytes, durationMs: Date.now() - proxyStarted });
       proxyReq.destroy();
+    } else {
+      gatewayLog('STREAM_CLIENT_FINISH', { bytes: proxyBytes, durationMs: Date.now() - proxyStarted });
     }
   });
 
