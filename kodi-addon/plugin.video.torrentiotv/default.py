@@ -384,7 +384,7 @@ def play_stream(params):
         status = http_get_json(f'{server}/api/status', timeout=2) or {}
         worker = status.get('worker') or {}
         speed = float(worker.get('downloadBytesPerSecond') or 0)
-        store_mb = float(worker.get('storeBytes') or 0) / 1024 / 1024
+        store_mb = float(worker.get('bufferAheadBytes') or 0) / 1024 / 1024
         peers = worker.get('peers', 0)
         speed_samples.append(speed)
         buffer_samples.append(store_mb)
@@ -394,7 +394,7 @@ def play_stream(params):
         msg = (
             f"Pos: {player.last_pos:.0f}s | DL: {format_rate(speed)} | "
             f"UL: {format_rate(worker.get('uploadBytesPerSecond', 0))} | Peers: {peers}\n"
-            f"RAM: {worker.get('ramMB', '?')} MB | Store: {store_mb:.1f} MB | "
+            f"RAM: {worker.get('ramMB', '?')} MB | Buffer ahead: {store_mb:.1f} MB | "
             f"Streams: {worker.get('activeStreams', 0)} | Conexiuni: {worker.get('connections', 0)}\n"
             f"DL grafic: {sparkline(speed_samples)}\n"
             f"RAM buffer: {sparkline(buffer_samples)}\n"
@@ -406,7 +406,7 @@ def play_stream(params):
             xbmc.log('[TorrentioTV][METRICS] ' + json.dumps({
                 'position': player.last_pos, 'downloadBps': speed,
                 'uploadBps': worker.get('uploadBytesPerSecond'), 'peers': peers,
-                'storeBytes': worker.get('storeBytes'), 'ramMB': worker.get('ramMB'),
+                'storeBytes': worker.get('storeBytes'), 'bufferAheadBytes': worker.get('bufferAheadBytes'), 'ramMB': worker.get('ramMB'),
                 'activeStreams': worker.get('activeStreams'), 'offset': worker.get('playbackOffset')
             }, sort_keys=True), xbmc.LOGINFO)
             last_status_log = time.time()
