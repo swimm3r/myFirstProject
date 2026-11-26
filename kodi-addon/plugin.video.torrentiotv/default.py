@@ -269,33 +269,6 @@ def sparkline(values, width=24):
     return ''.join(chars[min(len(chars) - 1, int((v / peak) * (len(chars) - 1)))] for v in values)
 
 
-class TorrentioDebugOverlay:
-    """Non-modal Kodi dialog kept above the video while playback is active."""
-
-    def __init__(self):
-        self.window = xbmcgui.WindowDialog()
-        screen_width = xbmcgui.getScreenWidth()
-        self.label = xbmcgui.ControlLabel(
-            24, 28, max(320, screen_width - 48), 40, '',
-            font='font10',
-            textColor='0xFFFFFFFF',
-            alignment=0
-        )
-        self.window.addControl(self.label)
-        self.window.show()
-        xbmc.log('[TorrentioTV][DEBUG] Persistent video overlay shown', xbmc.LOGINFO)
-
-    def update(self, text):
-        self.label.setLabel(text)
-
-    def close(self):
-        try:
-            self.window.close()
-            xbmc.log('[TorrentioTV][DEBUG] Persistent video overlay closed', xbmc.LOGINFO)
-        except Exception as e:
-            xbmc.log(f'[TorrentioTV][DEBUG] Overlay close failed: {e}', xbmc.LOGWARNING)
-
-
 class TorrentioPlayer(xbmc.Player):
     def __init__(self, server_url, history_payload):
         super().__init__()
@@ -393,7 +366,10 @@ def play_stream(params):
     monitor = xbmc.Monitor()
 
     debug_display = ADDON.getSetting('debug_display') == 'true'
-    debug_overlay = None
+    diag = None
+    if debug_display:
+        diag = xbmcgui.DialogProgressBG()
+        diag.create('TorrentioTV diagnostics', 'Waiting for playback...')
     speed_samples = []
     buffer_samples = []
     last_status_log = 0
@@ -401,12 +377,6 @@ def play_stream(params):
     while not player.isPlaying() and (time.time() - wait_start) < 15:
         if monitor.waitForAbort(0.5):
             break
-
-    if debug_display and player.isPlaying():
-        try:
-            debug_overlay = TorrentioDebugOverlay()
-        except Exception as e:
-            xbmc.log(f'[TorrentioTV][DEBUG] Could not create persistent overlay: {e}', xbmc.LOGERROR)
 
     while player.isPlaying() and not monitor.abortRequested():
         try:
@@ -424,7 +394,7 @@ def play_stream(params):
         speed_samples = speed_samples[-24:]
         buffer_samples = buffer_samples[-24:]
 
-        if debug_overlay:
+        if diag:
             display_parts = []
             if ADDON.getSetting('debug_show_position') == 'true':
                 display_parts.append(f"Pos {player.last_pos:.0f}s")
@@ -451,7 +421,7 @@ def play_stream(params):
             if ADDON.getSetting('debug_show_idle') == 'true':
                 display_parts.append(f"Idle {worker.get('idleForMs', '?')}ms")
             display_text = ' | '.join(display_parts) if display_parts else '(nimic selectat)'
-            debug_overlay.update('TorrentioTV LIVE | ' + display_text)
+            diag.update(0, 'TorrentioTV LIVE | ' + display_text)
         if time.time() - last_status_log >= 5:
             xbmc.log('[TorrentioTV][METRICS] ' + json.dumps({
                 'position': player.last_pos, 'downloadBps': speed,
@@ -463,8 +433,8 @@ def play_stream(params):
         if monitor.waitForAbort(1.0):
             break
 
-    if debug_overlay:
-        debug_overlay.close()
+    if diag:
+        diag.close()
     xbmc.log(f'[TorrentioTV][PLAYER] Playback loop ended; isPlaying={player.isPlaying()}, position={player.last_pos:.1f}s', xbmc.LOGWARNING)
     player._notify_stop()
 
