@@ -33,7 +33,7 @@ const WORKER_PORT = 4001;
 const WORKER_URL = `http://${WORKER_HOST}:${WORKER_PORT}`;
 
 const CINEMETA_URL = 'https://v3-cinemeta.strem.io';
-const TORRENTIO_URL = 'https://torrentio.strem.fun';
+const TORRENTIO_URL = 'https://torrentio.strem.fun/sort=seeders';
 const OPENSUB_URL = 'https://opensubtitles-v3.strem.io';
 
 const MAX_POSTERS = 80;
@@ -226,20 +226,31 @@ app.get('/api/streams/:type/:id', async (req, res) => {
     const r = await fetchWithTimeout(url, {}, 10000);
     const data = await r.json();
 
+    const seenTorrents = new Set();
     const filtered = (data.streams || [])
       .filter((s) => {
         if (!s || !s.infoHash) return false;
         const fullText = `${s.name || ''} ${s.title || ''}`.toLowerCase();
-        const isTooHeavy = /2160p|4k|uhd|remux|dolby\s*vision/.test(fullText);
+        const isTooHeavy = /2160p|4k|uhd|remux|dolby\\s*vision/.test(fullText);
         return !isTooHeavy;
+      })
+      // Torrentio returns streams sorted by seeders; deduplicate torrent/file pairs
+      // before the result limit so duplicates do not hide unique releases.
+      .filter((s) => {
+        const hash = String(s.infoHash).trim().toLowerCase();
+        const fileIdx = (typeof s.fileIdx === 'number') ? s.fileIdx : 'auto';
+        const key = `${hash}:${fileIdx}`;
+        if (seenTorrents.has(key)) return false;
+        seenTorrents.add(key);
+        return true;
       })
       .slice(0, 20)
       .map((s) => {
-        const lines = (s.title || '').split('\n');
+        const lines = (s.title || '').split('\\n');
         const mainLine = lines[0] || s.name || 'Stream';
         const infoLine = lines.slice(1).join(' | ');
         return {
-          name: (s.name || 'Torrent').replace(/\n/g, ' '),
+          name: (s.name || 'Torrent').replace(/\\n/g, ' '),
           title: infoLine ? `${mainLine} (${infoLine})` : mainLine,
           infoHash: s.infoHash,
           fileIdx: (typeof s.fileIdx === 'number') ? s.fileIdx : null
