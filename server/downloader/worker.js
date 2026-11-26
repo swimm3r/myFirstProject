@@ -204,6 +204,7 @@ app.post('/load', (req, res) => {
 
   torrent.on('ready', () => {
     if (responded) return;
+    clearTimeout(metaTimeout);
 
     torrent.files.forEach((f) => f.deselect());
 
