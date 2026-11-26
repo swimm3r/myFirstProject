@@ -567,3 +567,52 @@ Validation limitations:
   environment. No claim of receiver compatibility or native playback success
   is made from static source creation alone.
 - No Gateway/Worker/Kodi files were changed. No torrent session was started.
+
+
+18. ENIGMA2 SOLO2 ZIP INSTALLER ARTIFACT (2026-11-26)
+
+User request:
+- Make the diagnostic Enigma2 prototype easier to install as an archive.
+- Preserve all useful decisions and installation details in this continuity file for the next session.
+
+Archive created in the ChatGPT session:
+- File name: TorrentioTV-Enigma2-Solo2-0.1.zip
+- Contents:
+  - TorrentioTV/__init__.py
+  - TorrentioTV/api.py
+  - TorrentioTV/plugin.py
+  - README-INSTALL.txt (Romanian installation instructions)
+- ZIP structure is intended to be extracted so that the TorrentioTV directory is copied into:
+  /usr/lib/enigma2/python/Plugins/Extensions/
+- Expected installed paths:
+  /usr/lib/enigma2/python/Plugins/Extensions/TorrentioTV/__init__.py
+  /usr/lib/enigma2/python/Plugins/Extensions/TorrentioTV/api.py
+  /usr/lib/enigma2/python/Plugins/Extensions/TorrentioTV/plugin.py
+- The archive was opened again after creation and its expected member list checked. This verifies ZIP integrity/contents only; it does NOT validate Python 2 syntax, Enigma2 API compatibility, installation on the receiver, or plugin loading.
+- The archive is a session-generated downloadable artifact, not committed as a binary file in the repository. The canonical source remains the four files under:
+  enigma2-plugin/plugin.extensions.torrentiotv/
+  on feature/enigma2-solo2-client. If the session download expires, recreate the ZIP from those tracked source files; do not treat a stale local copy as authoritative.
+- The ZIP is a convenience wrapper around the same diagnostic-only prototype. It does NOT add catalog browsing, torrent preparation, playback, subtitles, lifecycle calls, ownership locking or any backend changes.
+- It does not install dependencies or run a package manager. It is not an IPK/OPKG package and has no automated installer/uninstaller.
+- Installation procedure: extract on PC; copy the whole TorrentioTV folder into /usr/lib/enigma2/python/Plugins/Extensions/; restart Enigma2; open Plugins -> TorrentioTV; configure the existing Gateway URL (for example http://192.168.1.X:4000); choose Check Gateway / Worker.
+- The Gateway URL is saved by the plugin in /etc/enigma2/torrentiotv.conf.
+- Keep the receiver as a thin frontend. Do not install Node.js, WebTorrent, ServiceApp or exteplayer3; all torrent activity and RAM buffering stay on the existing backend.
+- Kodi and Enigma2 remain alternative clients; do not run them simultaneously against the same backend session.
+
+Important outstanding code/runtime checks before calling the ZIP a supported installer:
+1) Inspect plugin.py against this old Enigma2 API, especially ActionMap callbacks using self['menu'].up/down and eTimer callback/start behavior. These were not tested on the actual image.
+2) Run the Python 2.7 import probe on the receiver with:
+   PYTHONPATH=/usr/lib/enigma2/python python -c "import enigma; import Screens.Screen; import Screens.InfoBar; import Components.ActionMap; import Plugins.Plugin; print 'Enigma2 imports OK'"
+3) Verify copied files and confirm TorrentioTV appears in the Plugins menu. If Enigma2 crashes, collect the actual crash log location/content; do not assume a particular log path exists on BlackHole.
+4) From the receiver, test Gateway reachability:
+   wget -S -O /dev/null http://IP_SERVER:4000/api/status 2>&1
+5) Do not enable prepare/playback until actual native HTTP/MKV playback, Range/206, seek and pause/resume are tested AND a shared Gateway-level single-client ownership mechanism is designed. A local Enigma2 lock is insufficient.
+6) User performs all merges. PR #28 remains user-owned; do not merge it.
+
+Current Git state for this handoff:
+- Work branch: feature/enigma2-solo2-client
+- Existing draft PR: https://github.com/swimm3r/myFirstProject/pull/28
+- PR base: main; head: feature/enigma2-solo2-client.
+- Latest known feature branch source commit before this continuity update: b81bc0673497fd472bba37cb9e89280ee7ef5f2b.
+- The continuity update below is to be committed to the same feature branch/PR. Check the live PR/branch status before relying on these identifiers in a later session.
+- No merge was performed.
