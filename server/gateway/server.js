@@ -359,9 +359,13 @@ app.post('/api/cancel', async (req, res) => {
 });
 
 app.post('/api/stop', async (req, res) => {
-  gatewayLog('KODI_STOP_RECEIVED');
+  gatewayLog('KODI_STOP_RECEIVED', req.body || {});
   try {
-    await fetchWithTimeout(`${WORKER_URL}/stop`, { method: 'POST' }, 1000);
+    await fetchWithTimeout(`${WORKER_URL}/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body || {})
+    }, 1000);
   } catch (e) {}
   res.json({ ok: true });
 });
