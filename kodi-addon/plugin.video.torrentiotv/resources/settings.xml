@@ -2,7 +2,6 @@
 <settings>
     <category label="General">
         <setting id="rpi_ip" type="text" label="Server IP Address" default="127.0.0.1"/>
-        <setting type="sep"/>
         <setting id="debug_display" type="bool" label="Enable debug information on display" default="false"/>
         <setting id="debug_show_position" type="bool" label="Playback position" default="true" subsetting="true" visible="eq(-1,true)"/>
         <setting id="debug_show_download" type="bool" label="Download speed" default="true" subsetting="true" visible="eq(-2,true)"/>
