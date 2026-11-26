@@ -218,3 +218,5 @@ Fix branch: fix/remove-webtorrent-default-full-selection
 - Upstream source reviewed: WebTorrent v1.9.7 lib/torrent.js (default selection, select/deselect exact-match behavior, CacheChunkStore wrapping) and lib/file.js (File.deselect interval), lib/file-stream.js (priority-1 stream selection).
 - Runtime validation on Raspberry Pi/Kodi is still required. Expected result: storeBytes should stay near the selected rolling window plus rewind/active stream/in-flight pieces, not grow by hundreds of MB. Check TORRENT_DEFAULT_SELECTION_REMOVED and torrentSelections in worker metrics.
 - No claim that playback is fixed until the user deploys and tests. User performs all merges; assistant must not merge.
+
+Historical-status clarification: the earlier section 9 entry describing PR #7 as the current open fix is superseded. At this task's start, `main` was verified at 75bf0c024bb96faac02865fac7be10bf0325eab1 and already contained the rolling-selection tracking changes from PR #7. The present branch was created from that exact `main` tip.
