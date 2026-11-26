@@ -68,7 +68,7 @@ def prepare_with_cancel(url, server_url, progress):
                 target=http_post_json,
                 args=(f'{server_url}/api/cancel',),
                 kwargs={'timeout': 1},
-                daemon=False
+                daemon=True
             ).start()
             return None, True
         try:
@@ -356,7 +356,7 @@ class TorrentioPlayer(xbmc.Player):
         threading.Thread(
             target=send_notifications,
             name='TorrentioTV-StopNotify',
-            daemon=True
+            daemon=False
         ).start()
 
 
