@@ -319,9 +319,17 @@ app.post('/api/resume', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/cancel', async (req, res) => {
+  // Cancel the worker-side torrent/prebuffer request immediately.
+  try {
+    await fetchWithTimeout(`${WORKER_URL}/cancel`, { method: 'POST' }, 1000);
+  } catch (e) {}
+  res.json({ ok: true });
+});
+
 app.post('/api/stop', async (req, res) => {
   try {
-    await fetchWithTimeout(`${WORKER_URL}/stop`, { method: 'POST' }, 3000);
+    await fetchWithTimeout(`${WORKER_URL}/stop`, { method: 'POST' }, 1000);
   } catch (e) {}
   res.json({ ok: true });
 });

@@ -15,6 +15,7 @@ class RingMemoryStore {
   constructor(chunkLength, opts = {}) {
     this.chunkLength = chunkLength;
     this.chunks = new Map();
+    activeStore = this;
     this.closed = false;
   }
   put(index, buf, cb = () => {}) {
@@ -46,7 +47,7 @@ const PAUSE_TIMEOUT_MS = 600000;
 const WINDOW_BYTES = 64 * 1024 * 1024;
 const PREBUFFER_BYTES = 8 * 1024 * 1024;
 const PREBUFFER_TIMEOUT_MS = 30000;
-const WINDOW_UPDATE_BYTES = 2 * 1024 * 1024;
+const WINDOW_UPDATE_BYTES = 1 * 1024 * 1024;
 
 const client = new WebTorrent({
   maxConns: 30,
@@ -56,6 +57,8 @@ const client = new WebTorrent({
 
 let activeTorrent = null;
 let activeFile = null;
+let activeStore = null;
+let pendingLoadResponse = null;
 let isPaused = false;
 let lastActivity = 0;
 let activeStreams = new Set();
@@ -77,6 +80,7 @@ function stopAndClean(reason) {
     const t = activeTorrent;
     activeTorrent = null;
     activeFile = null;
+    activeStore = null;
     try {
       t.destroy({ destroyStore: true }, () => {
         if (global.gc) {
@@ -125,12 +129,14 @@ function updateRamWindow(byteOffset) {
     const currentPiece = Math.floor((activeFile.offset + byteOffset) / pieceLen);
     const windowPieces = Math.ceil(WINDOW_BYTES / pieceLen);
 
-    const keepBehindPieces = Math.ceil((16 * 1024 * 1024) / pieceLen);
+    // Keep a small rewind cushion, then release RAM for pieces already consumed.
+    const keepBehindPieces = Math.ceil((8 * 1024 * 1024) / pieceLen);
     const dropUntil = currentPiece - keepBehindPieces;
     if (dropUntil > fileStartPiece) {
       activeTorrent.deselect(fileStartPiece, dropUntil, false);
-      // Keep downloaded pieces in the store: WebTorrent may still request them
-      // after a backward seek. Deselecting stops prioritizing them without deleting data.
+      if (activeStore && typeof activeStore.evictBefore === 'function') {
+        activeStore.evictBefore(dropUntil);
+      }
     }
 
     const endPriority = Math.min(fileEndPiece, currentPiece + windowPieces);
@@ -175,12 +181,20 @@ app.post('/load', (req, res) => {
   if (!magnet) return res.status(400).json({ error: 'Lipseste magnet' });
 
   stopAndClean('Incarcare torrent nou');
+  pendingLoadResponse = res;
+  res.on('close', () => {
+    if (!res.writableEnded && pendingLoadResponse === res) {
+      pendingLoadResponse = null;
+      stopAndClean('Clientul a anulat pregatirea');
+    }
+  });
 
   let responded = false;
   const metaTimeout = setTimeout(() => {
     if (!responded) {
       responded = true;
-      stopAndClean('Timeout metadate (25s - fara seederi)');
+      pendingLoadResponse = null;
+      stopAndClean('Timeout metadate (fara seederi)');
       res.status(504).json({ error: 'Timeout metadate torrent' });
     }
   }, 60000);
@@ -197,6 +211,7 @@ app.post('/load', (req, res) => {
     console.error('[WORKER] Eroare torrent:', err.message);
     if (!responded) {
       responded = true;
+      pendingLoadResponse = null;
       clearTimeout(metaTimeout);
       stopAndClean('Eroare torrent');
       res.status(500).json({ error: err.message });
@@ -223,6 +238,7 @@ app.post('/load', (req, res) => {
     prebufferFile(target).then((bufferedBytes) => {
       if (responded || activeTorrent !== torrent) return;
       responded = true;
+      pendingLoadResponse = null;
       clearTimeout(metaTimeout);
       lastActivity = Date.now();
       console.log(`[WORKER] Pregatit in RAM: ${target.name} (${Math.round(target.length / 1024 / 1024)} MB); pre-buffer: ${Math.round(bufferedBytes / 1024 / 1024)} MB`);
@@ -235,6 +251,7 @@ app.post('/load', (req, res) => {
     }).catch((err) => {
       if (responded) return;
       responded = true;
+      pendingLoadResponse = null;
       clearTimeout(metaTimeout);
       stopAndClean('Eroare la pre-buffering');
       if (!res.headersSent) res.status(504).json({ error: 'Nu s-au putut pre-incarca datele torrentului' });
@@ -346,7 +363,22 @@ app.post('/resume', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/cancel', (req, res) => {
+  const pending = pendingLoadResponse;
+  pendingLoadResponse = null;
+  if (pending && !pending.headersSent) {
+    pending.status(499).json({ error: 'Pregatirea a fost anulata' });
+  }
+  stopAndClean('Cancel imediat solicitat de Kodi');
+  res.json({ ok: true });
+});
+
 app.post('/stop', (req, res) => {
+  const pending = pendingLoadResponse;
+  pendingLoadResponse = null;
+  if (pending && !pending.headersSent) {
+    pending.status(499).json({ error: 'Redarea a fost oprita' });
+  }
   stopAndClean('Comanda explicita STOP de la Kodi');
   res.json({ ok: true });
 });
