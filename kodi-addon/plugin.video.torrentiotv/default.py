@@ -266,7 +266,7 @@ def play_stream(params):
     stream_id = params.get('id', '')
 
     prog = xbmcgui.DialogProgress()
-    prog.create('TorrentioTV', 'Pre-buffering 24MB in RAM (0 SSD write)...')
+    prog.create('TorrentioTV', 'Pre-buffering 8MB in RAM (0 SSD write)...')
 
     prep_url = f'{server}/api/prepare?hash={urllib.parse.quote(info_hash)}'
     if file_idx != '':
