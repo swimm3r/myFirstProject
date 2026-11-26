@@ -263,12 +263,13 @@ app.get('/api/streams/:type/:id', async (req, res) => {
           .replace(/[\p{S}\uFE0F\u200D]+/gu, '|')
           // Collapse repeated separators and discard empty metadata fields.
           .split('|')
-          .map((part) => part.replace(/[\p{S}\uFE0F\u200D]+/gu, '').trim())
-          .filter(Boolean);
-        const infoLine = infoParts.map((part, index) => {
-          // Only label fields whose meaning is clear from their value.
-          // Do not guess that arbitrary text is a source: it may be the file name.
-          if (index === 0 && /^\d+$/.test(part)) return `Seeds: ${part}`;
+          .map((part) => part.trim())
+          // Remove slash-only placeholders left behind by some Torrentio metadata.
+          .filter((part) => part && !/^[/\\]+$/.test(part));
+        const infoLine = infoParts.map((part) => {
+          // A standalone numeric metadata field is the seed count, wherever it appears.
+          // Keep arbitrary text untouched because it may be the release/file name.
+          if (/^\d+$/.test(part)) return `Seeds: ${part}`;
           if (/^\d+(?:\.\d+)?\s*(?:GB|MB|TB)$/i.test(part)) return `Size: ${part}`;
           return part;
         }).join(' | ');
