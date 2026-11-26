@@ -220,3 +220,38 @@ Fix branch: fix/remove-webtorrent-default-full-selection
 - No claim that playback is fixed until the user deploys and tests. User performs all merges; assistant must not merge.
 
 Historical-status clarification: the earlier section 9 entry describing PR #7 as the current open fix is superseded. At this task's start, `main` was verified at 75bf0c024bb96faac02865fac7be10bf0325eab1 and already contained the rolling-selection tracking changes from PR #7. The present branch was created from that exact `main` tip.
+
+11. REPLACEMENT IMPLEMENTATION FOR THE FAILED PR #9 APPROACH (2026-11-26)
+Base:
+- Branch: fix/continuous-range-manual-backpressure
+- Created directly from current main commit a27eeb04e2c633c7101330ba009f8cd0a8024eb0 (the merge revert of PR #9).
+- Target remains main. User performs all merges; do not merge.
+
+Why PR #9 failed:
+- WebTorrent 1.9.7 uses streamx Readable for File.createReadStream().
+- streamx v2.12.5 Readable.pipe(destination, callback) does NOT accept Node's { end: false } options object.
+- On readable end, streamx's ReadableState.updateNonPrimary() calls destination.end() automatically.
+- PR #9 used stream.pipe(res, { end: false }); the object was ignored as a callback, so the first 4 MiB segment ended the HTTP ServerResponse. The code then attempted to pump later segments into an already-ended response. This explains the regression; do not reuse that implementation.
+- Upstream sources inspected: webtorrent/webtorrent v1.9.7 lib/file-stream.js and mafintosh/streamx v2.12.5 index.js.
+
+Replacement in server/downloader/worker.js:
+- Open-ended Range parsing now maps bytes=N- to bytes N through EOF (fileSize - 1). Explicit bounded and suffix ranges retain their existing behavior.
+- Bounded WebTorrent reads remain 4 MiB each, so each FileStream selects only a small piece interval, not the whole multi-GB file.
+- Removed stream.pipe() from the segmented response path. Each FileStream is consumed with data events and written directly using res.write().
+- On res.write() backpressure, pause the current FileStream and resume it on res drain. If a segment finishes while the HTTP response is backpressured, do not create the next FileStream until drain.
+- Wait for each FileStream close before creating the next one, ensuring its WebTorrent selection is deselected before moving on.
+- The HTTP response remains open across segments and is ended only after the complete requested range has been written.
+- activeStreams now stores one HTTP response session object for the lifetime of the GET, not the individual short-lived FileStreams. The session owns the current FileStream and implements destroy(), so closeAllStreams() still cancels active playback during pause/stop/cleanup.
+- Rolling RAM window size, rewind cushion, priority, eviction, prebuffer and RAM watchdog were not changed.
+- Added segment-level error/early-close diagnostics and response-level STREAM_CLEANUP details, including streamedBytes and segmentsCompleted.
+
+Validation:
+- Fetched the complete branch worker.js and passed the JavaScript parser check (compiled with new Function); no syntax error.
+- Reviewed against streamx v2.12.5 implementation: pipe() ends destination on source end; pause()/resume() are available on its Readable.
+- No Raspberry Pi, real WebTorrent swarm, gateway or Kodi runtime test has been performed. Do not claim playback is fixed until the user deploys the exact worker to the runtime path and verifies a full playback.
+- Deployment mismatch remains important: repository worker path is server/downloader/worker.js; user has previously run rpi-server/downloader/worker.js. Verify/copy the updated worker to the actual execution path.
+- Expected runtime evidence: STREAM_REQUEST for Range bytes=0- reports end=fileSize-1 and requestedBytes=fileSize; activeStreams remains 1 across segment boundaries; playbackOffset advances beyond 16 MiB; STREAM_CLEANUP occurs only when the HTTP response finishes or the client disconnects; storeBytes remains bounded by the rolling selection and normal in-flight pieces.
+
+Next step:
+- Review the PR diff and run the user-side Raspberry Pi/Kodi playback test with synchronized worker, gateway and Kodi logs. The first validation milestone is that one GET response transfers beyond 16 MiB without a segment closing the HTTP response.
+
