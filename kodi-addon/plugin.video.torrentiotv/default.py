@@ -275,6 +275,7 @@ class TorrentioPlayer(xbmc.Player):
         self.server_url = server_url
         self.history_payload = history_payload
         self.stopped = False
+        self.stop_lock = threading.Lock()
         self.last_pos = 0
         self.stop_reason = 'unknown'
 
@@ -305,13 +306,58 @@ class TorrentioPlayer(xbmc.Player):
         self._notify_stop()
 
     def _notify_stop(self):
-        if self.stopped:
-            return
-        self.stopped = True
-        xbmc.log(f'[TorrentioTV][PLAYER] Sending STOP reason={self.stop_reason}, position={self.last_pos:.1f}s', xbmc.LOGWARNING)
-        http_post_json(f'{self.server_url}/api/stop', {'reason': self.stop_reason, 'position': self.last_pos}, timeout=2)
-        self.history_payload['position'] = int(self.last_pos)
-        http_post_json(f'{self.server_url}/api/history', self.history_payload, timeout=2)
+        # Kodi callbacks and the playback loop can both report the same stop.
+        # Guard once, then do all network I/O away from Kodi's player/UI thread.
+        with self.stop_lock:
+            if self.stopped:
+                return
+            self.stopped = True
+
+        stop_payload = {
+            'reason': self.stop_reason,
+            'position': self.last_pos
+        }
+        history_payload = dict(self.history_payload)
+        history_payload['position'] = int(self.last_pos)
+        xbmc.log(
+            f'[TorrentioTV][PLAYER] STOP queued reason={self.stop_reason}, '
+            f'position={self.last_pos:.1f}s',
+            xbmc.LOGWARNING
+        )
+
+        def send_notifications():
+            started = time.monotonic()
+            stop_started = time.monotonic()
+            http_post_json(
+                f'{self.server_url}/api/stop',
+                stop_payload,
+                timeout=1
+            )
+            xbmc.log(
+                f'[TorrentioTV][PLAYER] STOP request completed in '
+                f'{(time.monotonic() - stop_started) * 1000:.0f}ms',
+                xbmc.LOGINFO
+            )
+
+            # History is deliberately separate: it must never delay STOP.
+            history_started = time.monotonic()
+            http_post_json(
+                f'{self.server_url}/api/history',
+                history_payload,
+                timeout=2
+            )
+            xbmc.log(
+                f'[TorrentioTV][PLAYER] History request completed in '
+                f'{(time.monotonic() - history_started) * 1000:.0f}ms; '
+                f'notifications total={(time.monotonic() - started) * 1000:.0f}ms',
+                xbmc.LOGINFO
+            )
+
+        threading.Thread(
+            target=send_notifications,
+            name='TorrentioTV-StopNotify',
+            daemon=True
+        ).start()
 
 
 def play_stream(params):
