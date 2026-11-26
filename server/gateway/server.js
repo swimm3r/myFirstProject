@@ -286,7 +286,7 @@ app.get('/api/prepare', async (req, res) => {
         magnet,
         fileIdx: (fileIdx !== undefined && fileIdx !== '' && fileIdx !== 'null') ? Number(fileIdx) : undefined
       })
-    }, 38000);
+    }, 125000);
 
     if (!r.ok) {
       const errData = await r.json().catch(() => ({}));

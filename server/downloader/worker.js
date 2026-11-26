@@ -44,6 +44,8 @@ const MAX_RAM_MB = 650;
 const IDLE_TIMEOUT_MS = 45000;
 const PAUSE_TIMEOUT_MS = 600000;
 const WINDOW_BYTES = 48 * 1024 * 1024;
+const PREBUFFER_BYTES = 24 * 1024 * 1024;
+const PREBUFFER_TIMEOUT_MS = 55000;
 
 const client = new WebTorrent({
   maxConns: 30,
@@ -101,6 +103,8 @@ setInterval(() => {
   }
 
   if (lastActivity === 0) return;
+  // An open playback stream is active even when Kodi temporarily stops requesting bytes.
+  if (!isPaused && activeStreams.size > 0) return;
 
   const idleFor = Date.now() - lastActivity;
   if (!isPaused && idleFor > IDLE_TIMEOUT_MS) {
@@ -124,9 +128,8 @@ function updateRamWindow(byteOffset) {
     const dropUntil = currentPiece - keepBehindPieces;
     if (dropUntil > fileStartPiece) {
       activeTorrent.deselect(fileStartPiece, dropUntil, false);
-      if (activeTorrent.store && typeof activeTorrent.store.evictBefore === 'function') {
-        activeTorrent.store.evictBefore(dropUntil);
-      }
+      // Keep downloaded pieces in the store: WebTorrent may still request them
+      // after a backward seek. Deselecting stops prioritizing them without deleting data.
     }
 
     const endPriority = Math.min(fileEndPiece, currentPiece + windowPieces);
@@ -134,6 +137,36 @@ function updateRamWindow(byteOffset) {
       activeTorrent.select(currentPiece, endPriority, true);
     }
   } catch (e) {}
+}
+
+function prebufferFile(file) {
+  const bytes = Math.min(file.length, PREBUFFER_BYTES);
+  if (bytes <= 0) return Promise.resolve(0);
+  return new Promise((resolve, reject) => {
+    let received = 0;
+    let settled = false;
+    const stream = file.createReadStream({ start: 0, end: bytes - 1 });
+    activeStreams.add(stream);
+    const timer = setTimeout(() => finish(new Error('Timeout pre-buffering')) , PREBUFFER_TIMEOUT_MS);
+    function finish(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      activeStreams.delete(stream);
+      if (err) {
+        try { stream.destroy(); } catch (e) {}
+        reject(err);
+      } else {
+        resolve(received);
+      }
+    }
+    stream.on('data', (chunk) => {
+      received += chunk.length;
+      lastActivity = Date.now();
+    });
+    stream.on('end', () => finish(null));
+    stream.on('error', (err) => finish(err));
+  });
 }
 
 app.post('/load', (req, res) => {
@@ -149,7 +182,7 @@ app.post('/load', (req, res) => {
       stopAndClean('Timeout metadate (25s - fara seederi)');
       res.status(504).json({ error: 'Timeout metadate torrent' });
     }
-  }, 25000);
+  }, 60000);
 
   console.log('[WORKER] Conectare la peers in RAM...');
   const torrent = client.add(magnet, {
@@ -171,7 +204,6 @@ app.post('/load', (req, res) => {
 
   torrent.on('ready', () => {
     if (responded) return;
-    responded = true;
     clearTimeout(metaTimeout);
 
     torrent.files.forEach((f) => f.deselect());
@@ -186,69 +218,82 @@ app.post('/load', (req, res) => {
 
     updateRamWindow(0);
 
-    console.log(`[WORKER] Pregatit in RAM: ${target.name} (${Math.round(target.length / 1024 / 1024)} MB)`);
-    res.json({
-      ready: true,
-      name: target.name,
-      size: target.length
+    console.log(`[WORKER] Pre-buffering initial ${Math.min(target.length, PREBUFFER_BYTES) / 1024 / 1024} MB...`);
+    prebufferFile(target).then((bufferedBytes) => {
+      if (responded || activeTorrent !== torrent) return;
+      responded = true;
+      clearTimeout(metaTimeout);
+      lastActivity = Date.now();
+      console.log(`[WORKER] Pregatit in RAM: ${target.name} (${Math.round(target.length / 1024 / 1024)} MB); pre-buffer: ${Math.round(bufferedBytes / 1024 / 1024)} MB`);
+      res.json({
+        ready: true,
+        name: target.name,
+        size: target.length,
+        prebufferedBytes: bufferedBytes
+      });
+    }).catch((err) => {
+      if (responded) return;
+      responded = true;
+      clearTimeout(metaTimeout);
+      stopAndClean('Eroare la pre-buffering');
+      if (!res.headersSent) res.status(504).json({ error: 'Nu s-au putut pre-incarca datele torrentului' });
+      console.error('[WORKER] Pre-buffering esuat:', err.message);
     });
   });
 });
 
-app.head('/raw-stream', (req, res) => {
+function parseByteRange(header, fileSize) {
+  if (!header) return { start: 0, end: fileSize - 1, partial: false };
+  if (!/^bytes=\d*-\d*$/.test(header.trim()) || header.includes(',')) return null;
+  const value = header.trim().slice(6);
+  const [left, right] = value.split('-');
+  let start;
+  let end;
+  if (left === '') {
+    const suffixLength = Number(right);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(0, fileSize - suffixLength);
+    end = fileSize - 1;
+  } else {
+    start = Number(left);
+    end = right === '' ? Math.min(start + 16 * 1024 * 1024 - 1, fileSize - 1) : Number(right);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= fileSize || start > end) return null;
+    end = Math.min(end, fileSize - 1);
+  }
+  return { start, end, partial: true };
+}
+
+function sendStreamHeaders(req, res) {
   if (!activeFile) return res.status(404).end();
+  const fileSize = activeFile.length;
+  const range = parseByteRange(req.headers.range, fileSize);
+  if (!range) {
+    res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
+    return res.end();
+  }
   lastActivity = Date.now();
-  res.writeHead(200, {
+  if (req.method === 'GET') isPaused = false;
+  if (req.method === 'GET') updateRamWindow(range.start);
+  const headers = {
     'Accept-Ranges': 'bytes',
-    'Content-Length': activeFile.length,
+    'Content-Length': range.end - range.start + 1,
     'Content-Type': 'video/x-matroska'
-  });
+  };
+  if (range.partial) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${fileSize}`;
+  res.writeHead(range.partial ? 206 : 200, headers);
+  return range;
+}
+
+app.head('/raw-stream', (req, res) => {
+  if (!sendStreamHeaders(req, res)) return;
   res.end();
 });
 
 app.get('/raw-stream', (req, res) => {
   if (!activeFile) return res.status(404).send('Niciun fisier activ');
-
-  lastActivity = Date.now();
-  isPaused = false;
-
-  const fileSize = activeFile.length;
-  const range = req.headers.range;
-
-  let start = 0;
-  let end = fileSize - 1;
-
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    start = parseInt(parts[0], 10);
-    if (parts[1] && parts[1].trim() !== '') {
-      end = parseInt(parts[1], 10);
-    } else {
-      end = Math.min(start + 16 * 1024 * 1024 - 1, fileSize - 1);
-    }
-
-    if (isNaN(start) || start >= fileSize || end >= fileSize || start > end) {
-      res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
-      return res.end();
-    }
-
-    updateRamWindow(start);
-
-    const chunkSize = (end - start) + 1;
-    res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
-      'Content-Type': 'video/x-matroska'
-    });
-  } else {
-    updateRamWindow(0);
-    res.writeHead(200, {
-      'Accept-Ranges': 'bytes',
-      'Content-Length': fileSize,
-      'Content-Type': 'video/x-matroska'
-    });
-  }
+  const range = sendStreamHeaders(req, res);
+  if (!range) return;
+  const { start, end } = range;
 
   const stream = activeFile.createReadStream({ start, end });
   activeStreams.add(stream);
