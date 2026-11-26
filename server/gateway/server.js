@@ -363,29 +363,29 @@ app.post('/api/stop', (req, res) => {
   const payload = req.body || {};
   gatewayLog('KODI_STOP_RECEIVED', payload);
 
-  // Acknowledge Kodi immediately. Worker cleanup is dispatched independently,
-  // so neither torrent destruction nor a slow local HTTP round-trip blocks Kodi.
+  // Start delivery to the worker before acknowledging Kodi. The request runs
+  // independently, but is not deferred to a later event-loop turn.
+  const workerStartedAt = Date.now();
+  const workerRequest = fetchWithTimeout(`${WORKER_URL}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }, 1500);
+
+  // Never make Kodi wait for torrent destruction or worker response.
   res.json({ ok: true, accepted: true });
 
-  setImmediate(async () => {
-    const workerStartedAt = Date.now();
-    try {
-      const workerRes = await fetchWithTimeout(`${WORKER_URL}/stop`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }, 1500);
-      gatewayLog('KODI_STOP_WORKER_ACK', {
-        status: workerRes.status,
-        gatewayDispatchMs: workerStartedAt - receivedAt,
-        totalMs: Date.now() - receivedAt
-      });
-    } catch (e) {
-      gatewayLog('KODI_STOP_WORKER_ERROR', {
-        error: e.message,
-        totalMs: Date.now() - receivedAt
-      });
-    }
+  workerRequest.then((workerRes) => {
+    gatewayLog('KODI_STOP_WORKER_ACK', {
+      status: workerRes.status,
+      gatewayDispatchMs: workerStartedAt - receivedAt,
+      totalMs: Date.now() - receivedAt
+    });
+  }).catch((e) => {
+    gatewayLog('KODI_STOP_WORKER_ERROR', {
+      error: e.message,
+      totalMs: Date.now() - receivedAt
+    });
   });
 });
 
