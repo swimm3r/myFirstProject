@@ -248,7 +248,23 @@ app.get('/api/streams/:type/:id', async (req, res) => {
       .map((s) => {
         const lines = (s.title || '').split('\n');
         const mainLine = lines[0] || s.name || 'Stream';
-        const infoLine = lines.slice(1).join(' | ');
+        const rawInfoLine = lines.slice(1).join(' | ');
+        // Torrentio uses emoji/symbols as metadata separators. Replace them with
+        // plain-text labels so Kodi fonts without emoji support remain readable.
+        const infoParts = rawInfoLine
+          .replace(/[\\p{Extended_Pictographic}\\p{Emoji_Presentation}\\uFE0F\\u200D]+/gu, '|')
+          .split('|')
+          .map((part) => part.trim())
+          .filter(Boolean);
+        const infoLine = infoParts.map((part, index) => {
+          if (index === 0 && /^\\d+$/.test(part)) return `Seeders: ${part}`;
+          if (/^\\d+(?:\\.\\d+)?\\s*(?:GB|MB|TB)$/i.test(part)) return `Size: ${part}`;
+          if (index === infoParts.length - 1 && /^[a-z0-9.-]+$/i.test(part) &&
+              !/(?:\\d{3,4}p|x26[45]|hevc|av1|hdr|dolby|aac|dts)/i.test(part)) {
+            return `Source: ${part}`;
+          }
+          return part;
+        }).join(' | ');
         return {
           name: (s.name || 'Torrent').replace(/\n/g, ' '),
           title: infoLine ? `${mainLine} (${infoLine})` : mainLine,
