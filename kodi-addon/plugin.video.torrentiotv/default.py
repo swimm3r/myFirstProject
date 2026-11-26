@@ -63,7 +63,13 @@ def prepare_with_cancel(url, server_url, progress):
     threading.Thread(target=request_prepare, daemon=True).start()
     while True:
         if progress.iscanceled():
-            http_post_json(f'{server_url}/api/cancel', timeout=1)
+            # Do not make the UI wait for the cancel HTTP round-trip.
+            threading.Thread(
+                target=http_post_json,
+                args=(f'{server_url}/api/cancel',),
+                kwargs={'timeout': 1},
+                daemon=True
+            ).start()
             return None, True
         try:
             return result_queue.get(timeout=0.2), False
