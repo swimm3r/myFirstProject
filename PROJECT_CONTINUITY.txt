@@ -255,3 +255,35 @@ Validation:
 Next step:
 - Review the PR diff and run the user-side Raspberry Pi/Kodi playback test with synchronized worker, gateway and Kodi logs. The first validation milestone is that one GET response transfers beyond 16 MiB without a segment closing the HTTP response.
 
+12. CONFIGURABLE KODI DEBUG DISPLAY (2026-11-26)
+Branch:
+- feature/kodi-configurable-debug-display
+- Created from the latest main ref, not from an older feature branch.
+- PR targets main; user performs the merge.
+
+Changes:
+- kodi-addon/plugin.video.torrentiotv/resources/settings.xml:
+  - Added the main boolean setting "Enable debug information on display", default false.
+  - Added 12 dependent subsettings, shown only while the main switch is enabled.
+  - Individual choices: playback position, download speed, upload speed, peers, RAM usage, buffer ahead, active streams, connections, download speed graph, RAM buffer graph, playback offset and idle time.
+  - Subsettings default to true to preserve the previous full diagnostic view when the user first enables it; each can then be switched off independently.
+- kodi-addon/plugin.video.torrentiotv/default.py:
+  - DialogProgressBG is created/updated only when the main display-debug setting is enabled.
+  - Selected values are joined with " | " and displayed on one line; no selected values produces a short placeholder.
+  - Existing periodic METRICS logging and /api/status polling remain unchanged, so disabling on-screen debug does not remove diagnostic log collection.
+  - The dialog is closed only if it was created.
+
+Validation:
+- Settings XML parsed successfully with Python ElementTree.
+- The new Python display-rendering block passed ast.parse.
+- Repository file inspection confirmed all 12 option IDs are read, the previous multiline display has been removed, and dialog close is guarded.
+- Full Kodi runtime validation has not been performed. Confirm the dependent settings visibility and one-line display on the user's Kodi device after merge/install.
+- This change only affects the Kodi add-on UI; it does not modify worker/gateway buffering or streaming behavior.
+
+Commits on branch:
+- settings.xml: 72897117ad294391aad39e2789fc92cded574567
+- default.py: 6b065d54ecdcff9447a68c8bd3bc0589826433ed
+
+Next:
+- Open PR against main and leave it unmerged for the user.
+- After the user merges and installs the updated Kodi add-on, verify settings visibility, per-field selection, one-line rendering and normal playback.
