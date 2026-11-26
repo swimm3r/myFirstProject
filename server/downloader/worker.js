@@ -57,6 +57,8 @@ const WINDOW_BYTES = 64 * 1024 * 1024;
 const PREBUFFER_BYTES = 8 * 1024 * 1024;
 const PREBUFFER_TIMEOUT_MS = 30000;
 const WINDOW_UPDATE_BYTES = 1 * 1024 * 1024;
+// Keep this priority distinct from FileStream's priority=1 selections.
+const RAM_WINDOW_PRIORITY = 2;
 
 const client = new WebTorrent({
   maxConns: 30,
@@ -78,6 +80,8 @@ let playbackStartedAt = 0;
 let lastPlaybackOffset = 0;
 let streamRequestCount = 0;
 let lastStreamEventAt = 0;
+// The rolling window is one explicit WebTorrent selection, replaced on each shift.
+let ramWindowSelection = null;
 
 function diag(event, details = {}) {
   const stamp = new Date().toISOString();
@@ -119,6 +123,7 @@ function getDiagnostics() {
     storeBytes,
     bufferAheadBytes,
     storePieces: activeStore && activeStore.chunks ? activeStore.chunks.size : 0,
+    ramWindowSelection: ramWindowSelection ? { ...ramWindowSelection } : null,
     activeStreams: activeStreams.size,
     streamRequestCount,
     lastStreamEventAt,
@@ -144,6 +149,7 @@ function stopAndClean(reason) {
     console.log(`[WORKER] Oprire si eliberare RAM: ${reason}`);
   }
   closeAllStreams();
+  ramWindowSelection = null;
   isPaused = false;
   lastActivity = 0;
 
@@ -203,18 +209,38 @@ function updateRamWindow(byteOffset) {
     // Keep a small rewind cushion, then release RAM for pieces already consumed.
     const keepBehindPieces = Math.ceil((8 * 1024 * 1024) / pieceLen);
     const dropUntil = currentPiece - keepBehindPieces;
-    if (dropUntil > fileStartPiece) {
-      activeTorrent.deselect(fileStartPiece, dropUntil, false);
-      if (activeStore && typeof activeStore.evictBefore === 'function') {
-        activeStore.evictBefore(dropUntil);
-      }
+    if (dropUntil > fileStartPiece && activeStore && typeof activeStore.evictBefore === 'function') {
+      activeStore.evictBefore(dropUntil);
     }
 
     const endPriority = Math.min(fileEndPiece, currentPiece + windowPieces);
-    if (endPriority >= currentPiece) {
-      activeTorrent.select(currentPiece, endPriority, true);
+
+    // WebTorrent deselect() only removes an exact (start, end, priority) match.
+    // Replace our previous window selection instead of accumulating selections.
+    if (ramWindowSelection) {
+      activeTorrent.deselect(
+        ramWindowSelection.start,
+        ramWindowSelection.end,
+        ramWindowSelection.priority
+      );
+      ramWindowSelection = null;
     }
-  } catch (e) {}
+
+    if (endPriority >= currentPiece) {
+      activeTorrent.select(currentPiece, endPriority, RAM_WINDOW_PRIORITY);
+      ramWindowSelection = {
+        start: currentPiece,
+        end: endPriority,
+        priority: RAM_WINDOW_PRIORITY
+      };
+    }
+  } catch (e) {
+    diag('RAM_WINDOW_ERROR', {
+      message: e.message,
+      byteOffset,
+      selection: ramWindowSelection
+    });
+  }
 }
 
 function prebufferFile(file) {

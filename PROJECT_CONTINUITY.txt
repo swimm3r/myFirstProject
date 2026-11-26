@@ -146,7 +146,7 @@ Validation before PR #5:
 - Kodi background dialog is a rolling text sparkline, not a full historical chart.
 
 7. NEXT STEPS
-1) Verify PR #5 state and current main commit. Inspect PRs #2, #3, #4 if relevant.
+1) Current main was verified at commit e26152ddc42f87ab0499609ed9d010e10cefd8fa (merge PR #6). PR #5 was merged as PR #5 at commit 3bda4177f485f28d0af724a1cf998ac1aafff367.
 2) Verify user merged diagnostics and deployed exact worker/gateway/addon files to Raspberry Pi. Resolve rpi-server vs server path mismatch.
 3) Ask user to reproduce with same torrent.
 4) Collect synchronized logs: Kodi (callbacks, METRICS, errors); gateway (HTTP_IN/OUT, upstream headers/end/abort/client disconnect, STOP); worker (LOAD/PREBUFFER, METRICS, STREAM_REQUEST/CLEANUP, KODI_STOP, STOP_AND_CLEAN).
@@ -162,4 +162,40 @@ At handoff creation, latest main returned:
 - kodi-addon/plugin.video.torrentiotv/default.py: 2b14a392d08565953cc6d49609922b1546dae939
 - README.md: 09b6be357e1ecf13dea086def01568e156988072
 
-PROJECT_CONTINUITY.txt did not exist on main when checked. It is being introduced on a new branch based on the latest main.
+PROJECT_CONTINUITY.txt was added by PR #6 and is present on main. Earlier statements in this handoff saying it was still pending were historical and are superseded.
+
+
+9. LATEST DIAGNOSIS AND CURRENT FIX (2026-11-26)
+Current main baseline before this fix:
+- Main commit: e26152ddc42f87ab0499609ed9d010e10cefd8fa (PR #6 merge).
+- server/downloader/worker.js blob: bf656f23e0df91505ab5eb871cb03b5dfa3c23c5.
+- PROJECT_CONTINUITY.txt blob: 99d814f22fff06ea4213f0e82d93414204b805dd.
+- Raspberry Pi deployment path used by user: rpi-server/downloader/worker.js. That path does NOT exist in the repository; repository worker path is server/downloader/worker.js. The Pi file has SHA-256:
+  088df9f2ec2299e93497c194f235bc860ce2437aed7035085ac0333a5fc3f01d
+- User's grep confirmed the Pi copy has MAX_RAM_MB=650, WINDOW_BYTES=64 MiB, updateRamWindow(), evictBefore(), and matching call sites. Full snippets supplied by user match the current main worker logic; exact byte-for-byte identity was not established.
+
+Latest Kodi runtime evidence:
+- Playback ended at 37.1 seconds.
+- Worker metrics showed activeStreams drop to zero after the initial 16 MiB HTTP range; playback offset then remained at 16,777,216 while Kodi's playback position continued advancing.
+- storeBytes rose to about 458.6 MB and process RSS to about 713 MB.
+- The 650 MB RSS watchdog then called stopAndClean; storeBytes, peers and download speed fell to zero. This confirms the immediate stop cause is the RAM watchdog. The reason for the memory accumulation required code diagnosis.
+- Earlier log sequence also included an HTTP 499 during a cancelled /api/prepare attempt; treat that separately from the subsequent successful playback attempt.
+
+Confirmed WebTorrent API behavior (v1.9.7):
+- Upstream lib/torrent.js select(start,end,priority) appends a selection to torrent._selections.
+- deselect(start,end,priority) removes only the first selection whose start, end AND priority all exactly match.
+- Upstream source: https://github.com/webtorrent/webtorrent/blob/v1.9.7/lib/torrent.js#L971-L1008
+- Upstream lib/file-stream.js selects its read range at priority=true (1), and on destroy deselects that exact range at priority=true.
+- The old worker called activeTorrent.select(currentPiece,endPriority,true), which creates priority=1 selections, but attempted activeTorrent.deselect(fileStartPiece,dropUntil,false), which searches for a different interval and priority=0. It therefore does not remove the rolling-window selection.
+- Repeated window updates consequently accumulate WebTorrent selections rather than replacing the prior window. This is a confirmed selection bookkeeping bug and a plausible contributor to excess downloading/store growth. It is not yet proven to be the sole cause of all observed RSS growth.
+
+Current fix branch:
+- Branch: fix/track-rolling-window-selection
+- Created from main commit e26152ddc42f87ab0499609ed9d010e10cefd8fa.
+- Worker change committed on branch: 3fba6729e57c5e913f7446265c62b34f7a1f2035.
+- Change: track the exact active rolling-window selection; remove the previous selection using the same start/end/priority before adding the next; use priority 2 to distinguish the worker's window selection from FileStream's priority 1; retain 8 MiB rewind eviction; expose the active window selection in /status diagnostics; log RAM_WINDOW_ERROR instead of silently swallowing selection errors; clear tracked selection state during cleanup.
+- The old ineffective deselect(fileStartPiece,dropUntil,false) call was removed; it did not match the actual rolling selection and could not clear it.
+- PROJECT_CONTINUITY.txt is being updated in the same branch/PR.
+- Validation still required: inspect final diff, run node --check on worker.js, and verify repository diff/PR. No Raspberry Pi/WebTorrent/Kodi runtime test has been performed for this fix.
+- Do not raise MAX_RAM_MB or claim playback fixed. User must deploy the merged main version to the Pi's rpi-server/downloader/worker.js path (or explain the copy/sync step) and retest with synchronized Kodi, gateway and worker logs.
+- User performs all merges; assistant must not merge.
