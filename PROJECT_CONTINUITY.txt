@@ -117,8 +117,7 @@ Worker (server/downloader/worker.js):
 - METRICS every 5 seconds.
 - /status includes active torrent/file, playback offset/time, download/upload B/s, peers, connections, torrent progress, downloaded/uploaded bytes, piece length, RAM store bytes/pieces, active streams, stream request count, last stream event, idle duration, RAM MB.
 - RAM store tracks byte count incrementally.
-- bufferAheadBytes estimates contiguous cached piece bytes ahead of playback.
-- STOP log includes Kodi reason and position forwarded by gateway.
+- bufferAheadBytes estimates contiguous cached piece bytes ahead of playback.- STOP log includes Kodi reason and position forwarded by gateway.
 
 Gateway (server/gateway/server.js):
 - Timestamped gatewayLog helper.
@@ -237,8 +236,7 @@ Why PR #9 failed:
 Replacement in server/downloader/worker.js:
 - Open-ended Range parsing now maps bytes=N- to bytes N through EOF (fileSize - 1). Explicit bounded and suffix ranges retain their existing behavior.
 - Bounded WebTorrent reads remain 4 MiB each, so each FileStream selects only a small piece interval, not the whole multi-GB file.
-- Removed stream.pipe() from the segmented response path. Each FileStream is consumed with data events and written directly using res.write().
-- On res.write() backpressure, pause the current FileStream and resume it on res drain. If a segment finishes while the HTTP response is backpressured, do not create the next FileStream until drain.
+- Removed stream.pipe() from the segmented response path. Each FileStream is consumed with data events and written directly using res.write().- On res.write() backpressure, pause the current FileStream and resume it on res drain. If a segment finishes while the HTTP response is backpressured, do not create the next FileStream until drain.
 - Wait for each FileStream close before creating the next one, ensuring its WebTorrent selection is deselected before moving on.
 - The HTTP response remains open across segments and is ended only after the complete requested range has been written.
 - activeStreams now stores one HTTP response session object for the lifetime of the GET, not the individual short-lived FileStreams. The session owns the current FileStream and implements destroy(), so closeAllStreams() still cancels active playback during pause/stop/cleanup.
@@ -357,8 +355,7 @@ Enigma2 plugin scope (initial target):
 Compatibility and implementation constraints:
 - First inspect the exact BlackHole version/build and the Python interpreter/runtime available on the Solo2. Do not assume Python 2 or Python 3 from the image family name alone.
 - Inspect installed Enigma2 APIs and native player capabilities on the actual image: e.g. available service/player interfaces, HTTP streaming and byte-range behavior, subtitle integration, and callback/lifecycle semantics.
-- Choose the plugin packaging/layout and Python syntax to match the verified image. Keep dependencies minimal; avoid large pip installs or compiled dependencies on the receiver.
-- Do not import Kodi modules (xbmc, xbmcgui, xbmcplugin, xbmcaddon) into the Enigma2 plugin. Share backend protocol/behavior, not Kodi UI code.
+- Choose the plugin packaging/layout and Python syntax to match the verified image. Keep dependencies minimal; avoid large pip installs or compiled dependencies on the receiver.- Do not import Kodi modules (xbmc, xbmcgui, xbmcplugin, xbmcaddon) into the Enigma2 plugin. Share backend protocol/behavior, not Kodi UI code.
 - Keep UI and receiver-specific playback integration isolated from gateway/worker code. Prefer a small API client layer and explicit Enigma2 screen/player modules.
 - Validate receiver RAM/CPU/network constraints and ensure the plugin does not buffer entire media files locally.
 - Gateway currently binds to the LAN interface and has no authentication (see README security note). Keep it on a trusted LAN; do not expose it directly to the public internet. Any later authentication/network hardening should preserve compatibility for both clients.
@@ -442,3 +439,25 @@ Current status update:
 - Python version, Enigma2 build/API, GStreamer/player availability, package manager state and actual HTTP Range behavior remain unverified.
 - No Enigma2 plugin code or receiver-side installation has been performed yet.
 - This update is documentation-only and is prepared on branch docs/confirm-solo2-blackhole-runtime, created from the latest main commit. User performs all merges; do not merge.
+
+16. VU+ SOLO2 INVENTORY COMMANDS / SCRIPT (2026-11-26)
+
+Branch:
+- docs/vu-solo2-inventory-checklist
+- Created from latest main using base_ref=main. Target main; user performs all merges.
+
+Files added:
+- VU_SOLO2_INVENTORY.md: concise Romanian instructions for collecting receiver information, gateway connectivity and HTTP Range/player tests.
+- vu_solo2_inventory.sh: read-only shell inventory script. Writes /tmp/vu_solo2_inventory.txt; does not install/remove packages or modify receiver configuration.
+- Script collects image/kernel/CPU, Python interpreters and Enigma2 imports, relevant installed packages, player/GStreamer/codec files, Enigma2 modules/plugins/processes, network/TLS tools, RAM/storage and services.
+- The guide explains how to run over SSH, retrieve the report with scp, test gateway /api/status, and later test a real /video.mkv Range request and native player seek/pause/resume/stop.
+
+Validation / limitations:
+- Documentation and shell script were reviewed for read-only behavior; no receiver is connected, so no device/runtime test has been performed.
+- HTTP Range test requires an actual prepared TorrentioTV stream URL; the inventory script intentionally does not start playback or modify backend state.
+- Do not install ServiceApp/exteplayer3 or Node.js/WebTorrent on the Solo2 for discovery. Detect installed capabilities first.
+- New files were committed on branch docs/vu-solo2-inventory-checklist; PROJECT_CONTINUITY.txt is updated in this same PR.
+
+Next:
+- Open PR against main and leave it unmerged.
+- User runs the script on the VU+ Solo2 and shares /tmp/vu_solo2_inventory.txt (after removing any credentials), then we select the Enigma2 API/player based on observed runtime and test actual HTTP Range/seek behavior.
